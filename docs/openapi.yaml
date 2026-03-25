@@ -1,0 +1,50 @@
+openapi: 3.0.3
+info:
+  title: X Server API
+  version: 1.0.0
+  description: |
+    ## Overview
+
+    <!-- Description of the API, including its purpose, key features, authentication requirements, and other relevant information -->
+
+  contact:
+    name: Decentraland Foundation
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+
+# List of servers the API is available on
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+
+# List of tags for the API
+tags:
+  - name: X Server
+    description: API endpoints for X Server
+
+# List of security requirements for the API
+security:
+  # - SignedFetch: []
+
+paths:
+  # List of paths for the API
+  /health/check:
+    get:
+      summary: Check the server health
+      description: Check the server health to check if it is alive
+      responses:
+        '200':
+          description: OK
+        '500':
+          description: Internal Server Error
+
+components:
+  securitySchemes:
+    SignedFetch:
+      type: apiKey
+      in: header
+      name: X-Identity-Auth-Chain-*
+      description: |
+        Signed fetch authentication using Decentraland's ADR-44 specification.
+        Multiple headers are used to provide the authentication chain.
