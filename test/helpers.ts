@@ -246,16 +246,16 @@ export function makeEntry(overrides: { sys?: Record<string, unknown>; fields?: R
     sys: {
       id: 'entry-1',
       type: 'Entry',
-      space: { sys: { id: TEST_SPACE } },
-      environment: { sys: { id: TEST_ENVIRONMENT } },
-      contentType: { sys: { id: 'page' } },
+      space: { sys: { id: TEST_SPACE, type: 'Link', linkType: 'Space' } },
+      environment: { sys: { id: TEST_ENVIRONMENT, type: 'Link', linkType: 'Environment' } },
+      contentType: { sys: { id: 'page', type: 'Link', linkType: 'ContentType' } },
       revision: 1,
       updatedAt: '2025-01-01T00:00:00Z',
       ...overrides.sys
     },
     fields: overrides.fields ?? { title: { 'en-US': 'Test', es: 'Prueba' } },
     metadata: { tags: [] }
-  }
+  } as Entry
 }
 
 export function makeBlogEntry(
@@ -265,7 +265,7 @@ export function makeBlogEntry(
   return makeEntry({
     sys: {
       id: overrides.id || 'entry-1',
-      contentType: { sys: { id: contentTypeId } },
+      contentType: { sys: { id: contentTypeId, type: 'Link', linkType: 'ContentType' } },
       ...overrides.sys
     },
     fields: overrides.fields

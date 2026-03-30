@@ -40,8 +40,8 @@ test('when receiving a webhook event', ({ components }) => {
   }
 
   describe('and a blog post is published', () => {
-    let response: Response
-    let post: Record<string, unknown>
+    let response: Awaited<ReturnType<typeof postWebhook>>
+    let post: ReturnType<typeof createBlogPostEntry>
 
     beforeEach(async () => {
       post = createBlogPostEntry()
@@ -63,13 +63,14 @@ test('when receiving a webhook event', ({ components }) => {
   })
 
   describe('and a blog post is unpublished', () => {
-    let response: Response
+    let response: Awaited<ReturnType<typeof postWebhook>>
 
     beforeEach(async () => {
       const post = createBlogPostEntry()
       await postWebhook(post, 'publish')
 
-      const deletedPost = { ...post, sys: { ...post.sys, type: 'DeletedEntry' } }
+      const postSys = post.sys as Record<string, unknown>
+      const deletedPost = { ...post, sys: { ...postSys, type: 'DeletedEntry' } }
       response = await postWebhook(deletedPost, 'unpublish')
     })
 
@@ -84,7 +85,7 @@ test('when receiving a webhook event', ({ components }) => {
   })
 
   describe('and an asset is published', () => {
-    let response: Response
+    let response: Awaited<ReturnType<typeof postWebhook>>
 
     beforeEach(async () => {
       const asset = createAssetEntry()
@@ -98,12 +99,13 @@ test('when receiving a webhook event', ({ components }) => {
     it('should transform asset URLs to Decentraland CDN', async () => {
       const row = await findCachedEntry(components.pg, TEST_SPACE, TEST_ENVIRONMENT, 'Asset', 'asset-1')
       expect(row).not.toBeNull()
-      expect(row.content.fields.file['en-US'].url).toContain('cms-images.decentraland.org')
+      const content = row!.content as Record<string, any>
+      expect(content.fields.file['en-US'].url).toContain('cms-images.decentraland.org')
     })
   })
 
   describe('and the authorization is invalid', () => {
-    let response: Response
+    let response: Awaited<ReturnType<typeof components.localFetch.fetch>>
 
     beforeEach(async () => {
       const post = createBlogPostEntry()
@@ -124,7 +126,7 @@ test('when receiving a webhook event', ({ components }) => {
   })
 
   describe('and a blog category is published', () => {
-    let response: Response
+    let response: Awaited<ReturnType<typeof postWebhook>>
 
     beforeEach(async () => {
       const category = createBlogCategoryEntry()
@@ -143,7 +145,7 @@ test('when receiving a webhook event', ({ components }) => {
   })
 
   describe('and a blog author is published', () => {
-    let response: Response
+    let response: Awaited<ReturnType<typeof postWebhook>>
 
     beforeEach(async () => {
       const author = createBlogAuthorEntry()
@@ -164,7 +166,7 @@ test('when receiving a webhook event', ({ components }) => {
   })
 
   describe('and the webhook topic is invalid', () => {
-    let response: Response
+    let response: Awaited<ReturnType<typeof components.localFetch.fetch>>
 
     beforeEach(async () => {
       const post = createBlogPostEntry()
