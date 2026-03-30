@@ -99,7 +99,8 @@ test('when receiving a webhook event', ({ components }) => {
     it('should transform asset URLs to Decentraland CDN', async () => {
       const row = await findCachedEntry(components.pg, TEST_SPACE, TEST_ENVIRONMENT, 'Asset', 'asset-1')
       expect(row).not.toBeNull()
-      const content = row!.content as Record<string, any>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const content = row?.content as Record<string, any>
       expect(content.fields.file['en-US'].url).toContain('cms-images.decentraland.org')
     })
   })
