@@ -1,0 +1,1 @@
+export { toDecentralandCDNUrl } from './component'

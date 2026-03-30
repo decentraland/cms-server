@@ -6,7 +6,19 @@ import type {
   ILoggerComponent,
   IMetricsComponent
 } from '@well-known-components/interfaces'
+import type { IPgComponent } from '@dcl/pg-component'
+import type { ISchemaValidatorComponent } from '@dcl/schema-validator-component'
+import type { ICmsDatabaseComponent } from './adapters/cms-db'
+import type { IContentfulComponent } from './adapters/contentful/types'
 import type { metricDeclarations } from './metrics'
+
+export interface CmsConfig {
+  contentfulSpaceId: string
+  contentfulEnvironmentId: string
+  contentfulAccessToken: string
+}
+
+export type { IPgComponent }
 
 export interface GlobalContext {
   components: BaseComponents
@@ -19,6 +31,11 @@ export interface BaseComponents {
   server: IHttpServerComponent<GlobalContext>
   metrics: IMetricsComponent<keyof typeof metricDeclarations>
   fetcher: IFetchComponent
+  schemaValidator: ISchemaValidatorComponent<GlobalContext>
+  cmsConfig: CmsConfig
+  pg: IPgComponent
+  cmsDb: ICmsDatabaseComponent
+  contentful: IContentfulComponent
 }
 
 // components used in runtime

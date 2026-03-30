@@ -1,11 +1,18 @@
 openapi: 3.0.3
 info:
-  title: X Server API
+  title: CMS Server API
   version: 1.0.0
   description: |
     ## Overview
 
-    <!-- Description of the API, including its purpose, key features, authentication requirements, and other relevant information -->
+    The CMS Server is a caching proxy for Decentraland's Contentful-based blog and CMS content.
+    It receives webhook events from Contentful to keep a PostgreSQL cache in sync, and serves
+    cached content to frontend clients with localization, pagination, filtering, and ETag support.
+
+    ### Authentication
+
+    Write endpoints (webhook, sync, migrate) require a Bearer token matching the Contentful access token.
+    Read endpoints (blog listing, entry retrieval, locales) are public.
 
   contact:
     name: Decentraland Foundation
@@ -13,38 +20,414 @@ info:
     name: Apache 2.0
     url: https://www.apache.org/licenses/LICENSE-2.0.html
 
-# List of servers the API is available on
 servers:
   - url: http://localhost:3000
     description: Local development server
 
-# List of tags for the API
 tags:
-  - name: X Server
-    description: API endpoints for X Server
-
-# List of security requirements for the API
-security:
-  # - SignedFetch: []
+  - name: Health
+    description: Health check endpoints
+  - name: Blog
+    description: Blog content listing endpoints
+  - name: Entry
+    description: Individual entry/asset retrieval
+  - name: Webhook
+    description: Contentful webhook ingestion
+  - name: Sync
+    description: Content synchronization endpoints
+  - name: Admin
+    description: Administrative endpoints
 
 paths:
-  # List of paths for the API
-  /health/check:
+  /ping:
     get:
-      summary: Check the server health
-      description: Check the server health to check if it is alive
+      tags: [Health]
+      summary: Health check
       responses:
         '200':
           description: OK
-        '500':
-          description: Internal Server Error
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: /ping
+
+  /spaces/{space}/environments/{environment}/blog/{type}:
+    get:
+      tags: [Blog]
+      summary: List blog content
+      description: |
+        Returns a paginated list of blog posts, categories, or authors.
+        Supports filtering by category slug, author slug, and post slug.
+        Results are localized to the requested locale.
+      parameters:
+        - name: space
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Contentful space ID
+        - name: environment
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Contentful environment ID
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [posts, categories, authors]
+          description: Blog content type to list
+        - name: locale
+          in: query
+          schema:
+            type: string
+            enum: [en-US, es, zh]
+            default: en-US
+          description: Locale for field localization
+        - name: slug
+          in: query
+          schema:
+            type: string
+          description: Filter by exact slug match
+        - name: category
+          in: query
+          schema:
+            type: string
+          description: Filter posts by category slug
+        - name: author
+          in: query
+          schema:
+            type: string
+          description: Filter posts by author slug
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+          description: Maximum items per page
+        - name: skip
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Number of items to skip
+      responses:
+        '200':
+          description: Paginated list of blog content
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=300
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      description: Localized Contentful Entry
+                  total:
+                    type: integer
+                    description: Total matching items across all pages
+                  skip:
+                    type: integer
+                  limit:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /spaces/{space}/environments/{environment}/{types}/{id}:
+    get:
+      tags: [Entry]
+      summary: Get a single entry or asset
+      description: |
+        Retrieves a single Contentful entry or asset by ID.
+        Checks the database first, falls back to the Contentful CDN API on cache miss.
+        Supports ETag-based conditional requests (If-None-Match).
+      parameters:
+        - name: space
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: environment
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: types
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [entries, assets]
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Contentful sys.id
+        - name: locale
+          in: query
+          schema:
+            type: string
+            enum: [en-US, es, zh]
+            default: en-US
+      responses:
+        '200':
+          description: The localized entry or asset
+          headers:
+            ETag:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=300
+            Content-Length:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Contentful Entry or Asset JSON
+        '304':
+          description: Not Modified (ETag match)
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /spaces/{space}/environments/{environment}/locales:
+    get:
+      tags: [Entry]
+      summary: List available locales
+      description: Proxies the Contentful locales endpoint with 1-hour caching.
+      parameters:
+        - name: space
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: environment
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Contentful locales response
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=3600
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /webhook:
+    post:
+      tags: [Webhook]
+      summary: Process Contentful webhook
+      description: |
+        Receives publish/unpublish events from Contentful.
+        Routes blog content to dedicated tables and non-blog content to the generic cache.
+        Asset URLs are rewritten to Decentraland CDN hostnames.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Contentful Entry or Asset payload
+      responses:
+        '200':
+          description: Webhook processed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /spaces/{space}/environments/{environment}/blog/sync:
+    post:
+      tags: [Sync]
+      summary: Bulk sync all blog content
+      description: |
+        Fetches all blog posts, categories, and authors from Contentful and upserts them into the database.
+        Rate-limited to once per hour.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: space
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: environment
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Sync completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  synced:
+                    type: object
+                    properties:
+                      posts:
+                        type: integer
+                      categories:
+                        type: integer
+                      authors:
+                        type: integer
+                  timestamp:
+                    type: string
+                    format: date-time
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /spaces/{space}/environments/{environment}/blog/sync/entry/{entry_id}:
+    post:
+      tags: [Sync]
+      summary: Sync a single entry
+      description: Fetches a specific entry from Contentful and upserts it into the database.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: space
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: environment
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: entry_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Entry synced
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  entryId:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: date-time
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /migrate:
+    post:
+      tags: [Admin]
+      summary: Migration status
+      description: |
+        Reports that migrations are managed by pg-component and run automatically on startup.
+        This endpoint exists for compatibility with the Lambda version.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Migration status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  message:
+                    type: string
 
 components:
   securitySchemes:
-    SignedFetch:
-      type: apiKey
-      in: header
-      name: X-Identity-Auth-Chain-*
-      description: |
-        Signed fetch authentication using Decentraland's ADR-44 specification.
-        Multiple headers are used to provide the authentication chain.
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Contentful access token used as Bearer token for authenticated endpoints.
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              sys:
+                type: object
+                properties:
+                  type:
+                    type: string
+                    example: Error
+                  id:
+                    type: string
+                    example: NotFound
+              message:
+                type: string
+                example: The resource could not be found.
+              requestId:
+                type: string
+
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              sys:
+                type: object
+                properties:
+                  type:
+                    type: string
+                    example: Error
+                  id:
+                    type: string
+                    example: BadRequest
+              message:
+                type: string
+              requestId:
+                type: string
