@@ -250,6 +250,7 @@ export function makeEntry(overrides: { sys?: Record<string, unknown>; fields?: R
       environment: { sys: { id: TEST_ENVIRONMENT, type: 'Link', linkType: 'Environment' } },
       contentType: { sys: { id: 'page', type: 'Link', linkType: 'ContentType' } },
       revision: 1,
+      createdAt: '2025-01-01T00:00:00Z',
       updatedAt: '2025-01-01T00:00:00Z',
       ...overrides.sys
     },
