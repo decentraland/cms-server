@@ -488,11 +488,6 @@
   dependencies:
     "@jridgewell/trace-mapping" "0.3.9"
 
-"@dcl/core-commons@0.5.0":
-  version "0.5.0"
-  resolved "https://registry.yarnpkg.com/@dcl/core-commons/-/core-commons-0.5.0.tgz#a3fd055cb1dfb69758b2506b0867cda4547dd800"
-  integrity sha512-Lru7p7LcpTiIeZnpYQKRbYwHNqZBPieB7OLeGZ44kWt7+YdC6N7xj/GpAkn8xMGu+jcd7DaIZcfktZJqw+ELNA==
-
 "@dcl/core-commons@0.6.0":
   version "0.6.0"
   resolved "https://registry.yarnpkg.com/@dcl/core-commons/-/core-commons-0.6.0.tgz#30e98852e2a12a9f1f4d6eaafa4466973b557b3a"
@@ -554,14 +549,14 @@
     ajv "^8.17.1"
     ajv-formats "^3.0.1"
 
-"@dcl/traced-fetch-component@^1.0.0":
-  version "1.0.0"
-  resolved "https://registry.yarnpkg.com/@dcl/traced-fetch-component/-/traced-fetch-component-1.0.0.tgz#95c5ae2a148b92f2ad51ae36824c4de1f3812a9f"
-  integrity sha512-a1YKw+Fr52ZJf9AIiIq93wCtoqAqcIasc8IbaeQOEtIkM9+7aRFrdQEKKucnG9Ans2PMje9XJzFMCs1kf0tzbg==
+"@dcl/traced-fetch-component@^1.0.2":
+  version "1.0.2"
+  resolved "https://registry.yarnpkg.com/@dcl/traced-fetch-component/-/traced-fetch-component-1.0.2.tgz#5be68ced806185632cbebf1e3303c8e96c0e35b8"
+  integrity sha512-ADo9itOEK0iisGHjb42vFEe9DWdJIj9jBna3zXeSnWkH+1p1Dw7F7lAkanBI0vZK3FlnrpVt5FtUR0KcmZNCLg==
   dependencies:
-    "@dcl/core-commons" "0.5.0"
+    "@dcl/core-commons" "0.6.0"
     "@well-known-components/fetch-component" "^3.0.0"
-    "@well-known-components/interfaces" "^1.5.1"
+    "@well-known-components/interfaces" "^1.5.2"
 
 "@emnapi/core@^1.4.3":
   version "1.7.0"
@@ -1684,19 +1679,10 @@
     "@well-known-components/interfaces" "^1.2.0"
     tslib "^2.5.0"
 
-"@well-known-components/interfaces@^1.2.0", "@well-known-components/interfaces@^1.4.1", "@well-known-components/interfaces@^1.5.2":
+"@well-known-components/interfaces@^1.2.0", "@well-known-components/interfaces@^1.4.1", "@well-known-components/interfaces@^1.5.1", "@well-known-components/interfaces@^1.5.2":
   version "1.5.2"
   resolved "https://registry.yarnpkg.com/@well-known-components/interfaces/-/interfaces-1.5.2.tgz#ef7001a19d410459e65b216dd948d15be19e4efa"
   integrity sha512-TzKQblOci2Azczk1DZ4JL5aJW7hwq7kHrFMO4lCRMmW51bA71BtiZlq0WP72Dln067xTSoHQAU4WHCFJlGYvEQ==
-  dependencies:
-    "@types/node" "^20.3.1"
-    "@types/node-fetch" "^2.5.12"
-    typed-url-params "^1.0.1"
-
-"@well-known-components/interfaces@^1.5.1":
-  version "1.5.1"
-  resolved "https://registry.npmjs.org/@well-known-components/interfaces/-/interfaces-1.5.1.tgz"
-  integrity sha512-2/8/xSOGXB8UsC4P5ORqxox+zCep35ShvW8i660YrqO57jeElfUVKOtekYEZDH0TaebP4ek35bJUW+WbAw/d0w==
   dependencies:
     "@types/node" "^20.3.1"
     "@types/node-fetch" "^2.5.12"
