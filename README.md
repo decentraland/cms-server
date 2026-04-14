@@ -113,20 +113,6 @@ yarn build
 
 The service uses environment variables for configuration. Create a `.env` file in the root directory with the following variables (see `.env.default` for defaults):
 
-| Variable | Description | Required |
-|---|---|---|
-| `CONTENTFUL_SPACE_ID` | Contentful space ID | Yes |
-| `CONTENTFUL_ENVIRONMENT_ID` | Contentful environment (e.g. `master`) | Yes |
-| `CONTENTFUL_ACCESS_TOKEN` | Contentful CDN access token | Yes |
-| `PG_COMPONENT_PSQL_CONNECTION_STRING` | Full PostgreSQL connection URI | Yes (or individual vars below) |
-| `PG_COMPONENT_PSQL_HOST` | PostgreSQL host | If no connection string |
-| `PG_COMPONENT_PSQL_PORT` | PostgreSQL port (default: 5432) | If no connection string |
-| `PG_COMPONENT_PSQL_DATABASE` | PostgreSQL database name | If no connection string |
-| `PG_COMPONENT_PSQL_USER` | PostgreSQL user | If no connection string |
-| `PG_COMPONENT_PSQL_PASSWORD` | PostgreSQL password | If no connection string |
-| `HTTP_SERVER_PORT` | Server port (default: 3000) | No |
-| `HTTP_SERVER_HOST` | Server host (default: 0.0.0.0) | No |
-
 ### Running the Service
 
 #### Setting up the environment

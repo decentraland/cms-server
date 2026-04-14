@@ -20,7 +20,7 @@ on:
 jobs:
   deployment:
     if: ${{ inputs.deployment-environment }}
-    name: 'Deploy credits-server to: ${{ inputs.deployment-environment }}'
+    name: 'Deploy cms-server to: ${{ inputs.deployment-environment }}'
     runs-on: ubuntu-latest
     environment: ${{ inputs.deployment-environment }}
     steps:
@@ -28,7 +28,7 @@ jobs:
         id: deploy
         uses: decentraland/dcl-deploy-action@main
         with:
-          dockerImage: 'quay.io/decentraland/credits-server:${{ inputs.tag }}'
-          serviceName: credits-server
+          dockerImage: 'quay.io/decentraland/cms-server:${{ inputs.tag }}'
+          serviceName: cms-server
           env: ${{ inputs.deployment-environment }}
           token: ${{ secrets.GITHUB_TOKEN }}
