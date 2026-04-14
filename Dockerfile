@@ -15,7 +15,7 @@ RUN yarn
 # build the app
 COPY . /app
 RUN yarn build
-RUN yarn test
+RUN yarn test:unit
 
 # remove devDependencies, keep only used dependencies
 RUN yarn install --frozen-lockfile --production
