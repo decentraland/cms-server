@@ -10,6 +10,5 @@ jobs:
     uses: decentraland/platform-actions/.github/workflows/apps-docker-next.yml@main
     with:
       service-name: cms-server
-      image-name: cms-server
       deployment-environment: dev
     secrets: inherit
