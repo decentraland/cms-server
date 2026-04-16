@@ -35,7 +35,7 @@
   "dependencies": {
     "@dcl/http-server": "^1.0.0",
     "@dcl/schema-validator-component": "^0.2.0",
-    "@dcl/traced-fetch-component": "^1.0.0",
+    "@dcl/traced-fetch-component": "^1.0.2",
     "@well-known-components/env-config-provider": "^1.2.0",
     "@well-known-components/fetch-component": "^3.0.0",
     "@well-known-components/http-requests-logger-component": "^2.1.0",
