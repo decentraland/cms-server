@@ -31,7 +31,7 @@ interface CompareResult {
 
 // --- Paths to test ---
 
-function getTestPaths(): { path: string; description: string }[] {
+function getTestPaths(): Array<{ path: string; description: string }> {
   return [
     // Locales
     { path: `${BASE}/locales`, description: 'Locales' },
@@ -83,7 +83,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
   const keysA = Object.keys(a as Record<string, unknown>).sort()
   const keysB = Object.keys(b as Record<string, unknown>).sort()
   if (keysA.length !== keysB.length || keysA.some((k, i) => k !== keysB[i])) return false
-  return keysA.every((k) => deepEqual((a as any)[k], (b as any)[k]))
+  return keysA.every((k) => deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
 }
 
 function diffObjects(label: string, a: unknown, b: unknown, path = ''): string[] {
@@ -207,7 +207,7 @@ async function comparePath(testPath: string): Promise<CompareResult> {
 function stripVolatileFields(obj: Record<string, unknown>) {
   delete obj.requestId
   if (typeof obj.sys === 'object' && obj.sys !== null) {
-    delete (obj.sys as any).requestId
+    delete (obj.sys as Record<string, unknown>).requestId
   }
   // Recurse into items array (for listing responses)
   if (Array.isArray(obj.items)) {
@@ -227,18 +227,22 @@ async function discoverEntryIds(): Promise<{ entryIds: string[]; assetIds: strin
   const res = await fetch(url)
   if (!res.ok) return { entryIds: [], assetIds: [] }
 
-  const data = (await res.json()) as any
+  const data = (await res.json()) as { items?: Array<Record<string, Record<string, unknown>>> }
   const entryIds: string[] = []
   const assetIds: string[] = []
 
   for (const item of data.items || []) {
-    if (item?.sys?.id) {
-      entryIds.push(item.sys.id)
+    const sysId = (item?.sys as Record<string, unknown>)?.id as string | undefined
+    if (sysId) {
+      entryIds.push(sysId)
     }
     // Extract linked asset IDs from image fields
-    const image = item?.fields?.image
-    if (image?.sys?.id) {
-      assetIds.push(image.sys.id)
+    const image = (item?.fields as Record<string, unknown>)?.image as
+      | Record<string, Record<string, unknown>>
+      | undefined
+    const imageId = image?.sys?.id as string | undefined
+    if (imageId) {
+      assetIds.push(imageId)
     }
   }
 
@@ -272,8 +276,8 @@ async function main() {
   // Discover a category and author slug for filtered queries
   const catRes = await fetch(`${LAMBDA}${BASE}/blog/categories?limit=1`)
   if (catRes.ok) {
-    const catData = (await catRes.json()) as any
-    const catSlug = catData.items?.[0]?.fields?.id
+    const catData = (await catRes.json()) as { items?: Array<Record<string, Record<string, unknown>>> }
+    const catSlug = (catData.items?.[0]?.fields as Record<string, unknown> | undefined)?.id as string | undefined
     if (catSlug) {
       testPaths.push({
         path: `${BASE}/blog/categories?slug=${catSlug}`,
@@ -288,8 +292,8 @@ async function main() {
 
   const authRes = await fetch(`${LAMBDA}${BASE}/blog/authors?limit=1`)
   if (authRes.ok) {
-    const authData = (await authRes.json()) as any
-    const authSlug = authData.items?.[0]?.fields?.id
+    const authData = (await authRes.json()) as { items?: Array<Record<string, Record<string, unknown>>> }
+    const authSlug = (authData.items?.[0]?.fields as Record<string, unknown> | undefined)?.id as string | undefined
     if (authSlug) {
       testPaths.push({
         path: `${BASE}/blog/authors?slug=${authSlug}`,
@@ -321,8 +325,8 @@ async function main() {
         failed++
         failures.push(result)
       }
-    } catch (err: any) {
-      console.log(`  ERROR ${test.description}: ${err.message}`)
+    } catch (err: unknown) {
+      console.log(`  ERROR ${test.description}: ${(err as Error).message}`)
       failed++
     }
   }

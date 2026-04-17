@@ -17,7 +17,7 @@
  *   AWS_SESSION_TOKEN         - AWS session token (for temporary credentials)
  */
 
-import { S3Client, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3'
+import { GetObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { Client } from 'pg'
 
 // --- Config ---
@@ -100,6 +100,7 @@ async function migrateBlogCatalog(catalogType: CatalogType, contentType: Content
   const key = `spaces/${SPACE}/environments/${ENVIRONMENT}/blog/${catalogType}.json`
   console.log(`\nMigrating ${catalogType} catalog from ${key}...`)
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let items: any[]
   try {
     const raw = await getS3Object(key)
@@ -168,7 +169,14 @@ async function migrateBlogCatalog(catalogType: CatalogType, contentType: Content
              VALUES ($1, $2, $3, $4, $5, $6, now())
              ON CONFLICT (space, environment, id)
              DO UPDATE SET slug = EXCLUDED.slug, title = EXCLUDED.title, content = EXCLUDED.content, updated_at = now()`,
-            [entryId, SPACE, ENVIRONMENT, JSON.stringify(fields.id ?? {}), JSON.stringify(fields.title ?? {}), JSON.stringify(entry)]
+            [
+              entryId,
+              SPACE,
+              ENVIRONMENT,
+              JSON.stringify(fields.id ?? {}),
+              JSON.stringify(fields.title ?? {}),
+              JSON.stringify(entry)
+            ]
           )
           stats.categories++
           break
@@ -178,7 +186,14 @@ async function migrateBlogCatalog(catalogType: CatalogType, contentType: Content
              VALUES ($1, $2, $3, $4, $5, $6, now())
              ON CONFLICT (space, environment, id)
              DO UPDATE SET slug = EXCLUDED.slug, title = EXCLUDED.title, content = EXCLUDED.content, updated_at = now()`,
-            [entryId, SPACE, ENVIRONMENT, JSON.stringify(fields.id ?? {}), JSON.stringify(fields.title ?? {}), JSON.stringify(entry)]
+            [
+              entryId,
+              SPACE,
+              ENVIRONMENT,
+              JSON.stringify(fields.id ?? {}),
+              JSON.stringify(fields.title ?? {}),
+              JSON.stringify(entry)
+            ]
           )
           stats.authors++
           break
@@ -298,22 +313,23 @@ async function getS3Object(key: string): Promise<string | null> {
     const result = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }))
     if (!result.Body) return null
     return await result.Body.transformToString('utf-8')
-  } catch (err: any) {
-    if (err.name === 'NoSuchKey') return null
+  } catch (err: unknown) {
+    if ((err as { name?: string }).name === 'NoSuchKey') return null
     throw err
   }
 }
 
-function extractRefId(field: any): string | null {
+function extractRefId(field: unknown): string | null {
   if (!field) return null
-  if (typeof field === 'object' && !field.sys) {
-    for (const value of Object.values(field)) {
-      const id = (value as any)?.sys?.id
+  const obj = field as Record<string, unknown>
+  if (typeof field === 'object' && !(obj as Record<string, unknown>).sys) {
+    for (const value of Object.values(obj)) {
+      const id = (value as Record<string, Record<string, string>>)?.sys?.id
       if (id) return id
     }
     return null
   }
-  return field?.sys?.id ?? null
+  return (obj as Record<string, Record<string, string>>)?.sys?.id ?? null
 }
 
 function requiredEnv(name: string): string {
