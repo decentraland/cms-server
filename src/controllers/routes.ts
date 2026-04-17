@@ -1,7 +1,6 @@
 import { Router } from '@dcl/http-server'
 import { blogHandler } from './handlers/blog-handler'
 import { entryHandler, localesHandler } from './handlers/entry-handler'
-import { migrateHandler } from './handlers/migrate-handler'
 import { pingHandler } from './handlers/ping-handler'
 import { bulkSyncHandler, singleEntrySyncHandler } from './handlers/sync-handler'
 import { webhookHandler } from './handlers/webhook-handler'
@@ -31,9 +30,6 @@ export async function setupRouter(_: GlobalContext): Promise<Router<GlobalContex
 
   // Sync: bulk (all blog content)
   router.post('/spaces/:space/environments/:environment/blog/sync', bulkSyncHandler)
-
-  // Database migrations (manual trigger — pg-component runs migrations on start)
-  router.post('/migrate', migrateHandler)
 
   return router
 }
