@@ -122,7 +122,7 @@ test('when syncing blog content', ({ components }) => {
       const post = createBlogPostEntry({ id: 'single-sync', slug: 'single-synced' })
 
       nock('https://cdn.contentful.com')
-        .get(`/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/entries/single-sync`)
+        .get(`/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/entries/single-sync?locale=*`)
         .reply(200, post)
 
       const response = await components.localFetch.fetch(
@@ -140,7 +140,7 @@ test('when syncing blog content', ({ components }) => {
       const post = createBlogPostEntry({ id: 'single-sync-2', slug: 'single-synced-2' })
 
       nock('https://cdn.contentful.com')
-        .get(`/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/entries/single-sync-2`)
+        .get(`/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/entries/single-sync-2?locale=*`)
         .reply(200, post)
 
       await components.localFetch.fetch(

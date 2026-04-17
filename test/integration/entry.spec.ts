@@ -65,7 +65,7 @@ test('when retrieving an individual entry', ({ components }) => {
       const contentfulEntry = createBlogPostEntry({ id: 'remote-post', slug: 'remote' })
 
       nock('https://cdn.contentful.com')
-        .get(`/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/entries/remote-post`)
+        .get(`/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/entries/remote-post?locale=*`)
         .reply(200, contentfulEntry)
 
       const response = await components.localFetch.fetch(
@@ -80,7 +80,7 @@ test('when retrieving an individual entry', ({ components }) => {
       const contentfulEntry = createBlogPostEntry({ id: 'remote-post-2', slug: 'remote-2' })
 
       nock('https://cdn.contentful.com')
-        .get(`/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/entries/remote-post-2`)
+        .get(`/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/entries/remote-post-2?locale=*`)
         .reply(200, contentfulEntry)
 
       await components.localFetch.fetch(`/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/entries/remote-post-2`)
@@ -93,7 +93,7 @@ test('when retrieving an individual entry', ({ components }) => {
   describe('and the entry does not exist anywhere', () => {
     it('should return 404', async () => {
       nock('https://cdn.contentful.com')
-        .get(`/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/entries/nonexistent`)
+        .get(`/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/entries/nonexistent?locale=*`)
         .reply(404, { sys: { type: 'Error', id: 'NotFound' }, message: 'not found' })
 
       const response = await components.localFetch.fetch(
