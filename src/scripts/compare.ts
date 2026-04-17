@@ -174,14 +174,19 @@ async function comparePath(testPath: string): Promise<CompareResult> {
     serverBody = serverRes.body
   }
 
-  // For entry/asset responses, ignore sys.locale if one is set and the other isn't
-  // (framework differences), and ignore requestId (always different)
+  // Strip fields that are expected to differ (requestId, CMA-only metadata)
   if (typeof lambdaBody === 'object' && lambdaBody !== null) {
     stripVolatileFields(lambdaBody as Record<string, unknown>)
   }
   if (typeof serverBody === 'object' && serverBody !== null) {
     stripVolatileFields(serverBody as Record<string, unknown>)
   }
+
+  // Normalize item ordering for listing responses — the lambda and server may use different
+  // sort orders (S3 catalog order vs DB ORDER BY). Sort both by sys.id so we compare content,
+  // not ordering.
+  normalizeItemOrder(lambdaBody)
+  normalizeItemOrder(serverBody)
 
   if (!deepEqual(lambdaBody, serverBody)) {
     const bodyDiffs = diffObjects('Body', lambdaBody, serverBody)
@@ -207,7 +212,13 @@ async function comparePath(testPath: string): Promise<CompareResult> {
 function stripVolatileFields(obj: Record<string, unknown>) {
   delete obj.requestId
   if (typeof obj.sys === 'object' && obj.sys !== null) {
-    delete (obj.sys as Record<string, unknown>).requestId
+    const sys = obj.sys as Record<string, unknown>
+    delete sys.requestId
+    // createdBy/updatedBy are CMA-only fields delivered by webhooks but absent from the CDN API.
+    // The lambda's S3 data comes from webhooks (CMA format), the server syncs from CDN — so these
+    // will always differ. They are internal Contentful metadata, not content fields.
+    delete sys.createdBy
+    delete sys.updatedBy
   }
   // Recurse into items array (for listing responses)
   if (Array.isArray(obj.items)) {
@@ -217,6 +228,21 @@ function stripVolatileFields(obj: Record<string, unknown>) {
       }
     }
   }
+}
+
+/**
+ * Sorts an `items` array by sys.id so ordering differences between lambda
+ * (S3 catalog order) and server (DB ORDER BY) don't produce false failures.
+ */
+function normalizeItemOrder(body: unknown) {
+  if (typeof body !== 'object' || body === null) return
+  const obj = body as Record<string, unknown>
+  if (!Array.isArray(obj.items)) return
+  obj.items.sort((a: unknown, b: unknown) => {
+    const idA = String((a as Record<string, Record<string, unknown>>)?.sys?.id ?? '')
+    const idB = String((b as Record<string, Record<string, unknown>>)?.sys?.id ?? '')
+    return idA.localeCompare(idB)
+  })
 }
 
 // --- Entry/Asset discovery ---
