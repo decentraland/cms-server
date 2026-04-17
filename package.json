@@ -9,9 +9,11 @@
     "test": "jest --forceExit --detectOpenHandles --coverage --verbose",
     "test:unit": "jest --forceExit --verbose test/unit",
     "test:integration": "jest --config jest.integration.config.js",
-    "migrate": "node-pg-migrate --database-url-var PG_COMPONENT_PSQL_CONNECTION_STRING --envPath .env -j ts --tsconfig tsconfig.json -m ./src/migrations"
+    "migrate:s3-to-db": "ts-node src/scripts/migrate.ts",
+    "compare": "ts-node src/scripts/compare.ts"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.600.0",
     "@dcl/eslint-config": "^2.3.1",
     "@types/node": "^20.14.2",
     "@types/pg": "^8.11.0",

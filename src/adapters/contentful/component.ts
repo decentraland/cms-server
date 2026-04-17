@@ -51,7 +51,7 @@ export async function createContentfulComponent(
     id: string
   ): Promise<(Entry | Asset) | null> {
     const pathSegment = type === 'Entry' ? 'entries' : 'assets'
-    const url = `${BASE_URL}/spaces/${space}/environments/${environment}/${pathSegment}/${id}`
+    const url = `${BASE_URL}/spaces/${space}/environments/${environment}/${pathSegment}/${id}?locale=*`
 
     const response = await fetcher.fetch(url, {
       headers: { Authorization: `Bearer ${token}` }
@@ -114,7 +114,7 @@ export async function createContentfulComponent(
     let total = 0
 
     do {
-      const url = `${BASE_URL}/spaces/${space}/environments/${environment}/entries?content_type=${contentType}&limit=${limit}&skip=${skip}`
+      const url = `${BASE_URL}/spaces/${space}/environments/${environment}/entries?content_type=${contentType}&locale=*&limit=${limit}&skip=${skip}`
       const response = await fetcher.fetch(url, {
         headers: { Authorization: `Bearer ${token}` }
       })
