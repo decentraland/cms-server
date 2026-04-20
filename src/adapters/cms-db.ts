@@ -58,6 +58,16 @@ const LOCALE_FTS: Record<string, { config: string; tsvector: string; text: strin
 const FUZZY_SIMILARITY_THRESHOLD = 0.4
 
 /**
+ * Minimum raw query length to apply fuzzy matching. Short queries (≤3 chars) include
+ * most English/Spanish stopwords ("the", "and", "or", "is", "un", "el") — those have
+ * trigram similarity ≈ 1.0 against almost any text that contains them, which floods
+ * results with irrelevant hits. FTS correctly drops stopwords and prefix-matches real
+ * tokens, so short queries rely on FTS alone; fuzzy only kicks in once there's enough
+ * query length for typos to be a real concern.
+ */
+const FUZZY_MIN_QUERY_LENGTH = 4
+
+/**
  * Sanitizes a user-supplied search string and converts it into a `to_tsquery`-compatible
  * prefix query. Returns `null` if the input contains no usable tokens.
  * Each whitespace-separated token becomes a prefix term joined by `&`, e.g. `"party time"`
@@ -339,6 +349,13 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     }
     const { config, tsvector, text: textCol } = fts
 
+    // Disable fuzzy matching on short queries by passing an empty string as the fuzzy
+    // probe: word_similarity('', anything) returns 0, which is below the threshold, so
+    // every fuzzy OR-clause short-circuits to FALSE and the row is selected by FTS alone.
+    // This keeps the SQL shape (and prepared-statement cache entry) stable regardless of
+    // query length.
+    const fuzzyProbe = rawQuery.length >= FUZZY_MIN_QUERY_LENGTH ? rawQuery : ''
+
     // Always join the post's referenced author/category (by id) so their search vectors
     // and headline text are available. A second pair of joins (`cat_slug`, `auth_slug`)
     // supports the existing category= / author= slug filters without breaking them.
@@ -373,7 +390,16 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
       OR word_similarity($8::text, coalesce(bp_cat.${textCol}, '')) >= ${FUZZY_SIMILARITY_THRESHOLD}
     )`
 
-    const params = [space, environment, category || null, locale, author || null, slug || null, tsqueryString, rawQuery]
+    const params = [
+      space,
+      environment,
+      category || null,
+      locale,
+      author || null,
+      slug || null,
+      tsqueryString,
+      fuzzyProbe
+    ]
 
     // ts_rank dominates when the FTS predicate matches; the trigram term is scaled down
     // so exact/prefix hits always outrank typo-only hits, but typo hits still get a signal.

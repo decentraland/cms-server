@@ -90,6 +90,24 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
       bodyTextEs: 'Baile y música hasta el amanecer',
       publishedDate: '2024-01-10T00:00:00.000Z'
     })
+    // Two posts that share the word "lighthouse" but in different weight classes,
+    // used to verify setweight() surfaces title hits above body hits.
+    const postLighthouseTitle = createBlogPostEntry({
+      id: 'post-lighthouse-title',
+      slug: 'lighthouse-overview',
+      title: 'Lighthouse Overview',
+      description: 'A look at the iconic landmark',
+      bodyText: 'Details about architectural features',
+      publishedDate: '2024-02-20T00:00:00.000Z'
+    })
+    const postLighthouseBody = createBlogPostEntry({
+      id: 'post-lighthouse-body',
+      slug: 'landmark-tour',
+      title: 'Landmark Tour',
+      description: 'A generic walkthrough',
+      bodyText: 'We pass by a lighthouse on the way',
+      publishedDate: '2024-02-25T00:00:00.000Z'
+    })
 
     for (const entry of [
       techCategory,
@@ -101,7 +119,9 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
       postRust,
       postJane,
       postEvents,
-      postEsOnly
+      postEsOnly,
+      postLighthouseTitle,
+      postLighthouseBody
     ]) {
       await postWebhook(entry)
     }
@@ -226,7 +246,7 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
       )
       expect(response.status).toBe(200)
       const body = await response.json()
-      expect(body.total).toBe(6)
+      expect(body.total).toBe(8)
       expect(body.items[0]._rank).toBeUndefined()
     })
   })
@@ -317,6 +337,52 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
       expect(response.status).toBe(200)
       const body = await response.json()
       expect(body.total).toBe(0)
+    })
+  })
+
+  describe('and q is a short English stopword', () => {
+    it('should not flood the results via fuzzy matching', async () => {
+      // "the" is stripped by the english text-search config, leaving an empty tsquery.
+      // With fuzzy matching gated by minimum length, it must not match every post whose
+      // body happens to contain the word "the".
+      const response = await components.localFetch.fetch(
+        `/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/posts?q=the`
+      )
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(body.total).toBe(0)
+    })
+  })
+
+  describe('and a query word appears in two posts — one in the title, one in the body', () => {
+    it('should rank the title match above the body match', async () => {
+      const response = await components.localFetch.fetch(
+        `/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/posts?q=lighthouse`
+      )
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      const ids = body.items.map((item: { fields: { id: string } }) => item.fields.id)
+      const titlePos = ids.indexOf('lighthouse-overview')
+      const bodyPos = ids.indexOf('landmark-tour')
+      expect(titlePos).toBeGreaterThanOrEqual(0)
+      expect(bodyPos).toBeGreaterThanOrEqual(0)
+      expect(titlePos).toBeLessThan(bodyPos)
+      expect(body.items[titlePos]._rank).toBeGreaterThan(body.items[bodyPos]._rank)
+    })
+  })
+
+  describe('and the result is paginated', () => {
+    it('should preserve rank-descending order across pages', async () => {
+      const page1 = await components.localFetch
+        .fetch(`/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/posts?q=par&limit=1&skip=0`)
+        .then((r) => r.json())
+      const page2 = await components.localFetch
+        .fetch(`/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/posts?q=par&limit=1&skip=1`)
+        .then((r) => r.json())
+      expect(page1.items).toHaveLength(1)
+      expect(page2.items).toHaveLength(1)
+      expect(page1.items[0]._rank).toBeGreaterThanOrEqual(page2.items[0]._rank)
+      expect(page1.items[0].fields.id).not.toBe(page2.items[0].fields.id)
     })
   })
 })
