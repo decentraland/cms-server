@@ -1,5 +1,5 @@
+import type { ListedEntry, SearchHighlight } from '../../adapters/cms-db'
 import type { Locale } from '../localization/types'
-import type { Entry } from 'contentful'
 
 /** Pre-validated params for the blog listing logic. */
 export interface BlogListParams {
@@ -15,18 +15,13 @@ export interface BlogListParams {
   skip: number
 }
 
-/** `<em>`-wrapped snippets produced by ts_headline when a search query is supplied. */
-export interface BlogPostHighlight {
-  title?: string
-  description?: string
-  body?: string
-}
-
-/** An Entry plus optional full-text-search metadata populated when `q` is present. */
-export type BlogListItem = Entry & {
-  _rank?: number
-  _highlight?: BlogPostHighlight
-}
+/**
+ * The logic layer exposes the adapter-level entry shape under domain names. Aliasing
+ * (rather than redeclaring) keeps a single source of truth for `_rank` / `_highlight`
+ * so the two layers can't drift.
+ */
+export type BlogPostHighlight = SearchHighlight
+export type BlogListItem = ListedEntry
 
 export interface BlogListResult {
   items: BlogListItem[]

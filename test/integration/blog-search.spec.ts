@@ -411,4 +411,36 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
       expect(page1.items[0].fields.id).not.toBe(page2.items[0].fields.id)
     })
   })
+
+  describe('and skip is past the end of the result set', () => {
+    it('should return an empty items array but still report the true pre-limit total', async () => {
+      const response = await components.localFetch.fetch(
+        `/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/posts?q=epic&limit=10&skip=100`
+      )
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(body.items).toHaveLength(0)
+      expect(body.total).toBe(1)
+    })
+  })
+})
+
+test('when the adapter receives an unsupported locale on a search query', ({ components }) => {
+  beforeEach(async () => {
+    await cleanTestDb(components.pg)
+  })
+
+  describe('and the locale is not one of the known locales', () => {
+    it('should return an empty result rather than throw', async () => {
+      // The handler validates locale before calling the adapter, so this exercises the
+      // adapter-level defensive early-return directly.
+      const result = await components.cmsDb.listBlogPosts(TEST_SPACE, TEST_ENVIRONMENT, {
+        locale: 'fr-FR',
+        q: 'anything',
+        limit: 10,
+        skip: 0
+      })
+      expect(result).toEqual({ items: [], total: 0 })
+    })
+  })
 })

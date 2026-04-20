@@ -1,4 +1,4 @@
-import { buildPrefixTsQuery } from '../../../src/adapters/cms-db'
+import { asHighlight, buildPrefixTsQuery } from '../../../src/adapters/cms-db'
 
 describe('when building a prefix tsquery from a user-supplied search string', () => {
   describe('and the string is a single word', () => {
@@ -36,6 +36,27 @@ describe('when building a prefix tsquery from a user-supplied search string', ()
       expect(buildPrefixTsQuery('   ')).toBeNull()
       expect(buildPrefixTsQuery('&&&&')).toBeNull()
       expect(buildPrefixTsQuery('')).toBeNull()
+    })
+  })
+})
+
+describe('when filtering a ts_headline snippet through asHighlight', () => {
+  describe('and the snippet contains <em> tags from ts_headline', () => {
+    it('should return the snippet unchanged', () => {
+      expect(asHighlight('Epic <em>Party</em> Night')).toBe('Epic <em>Party</em> Night')
+    })
+  })
+
+  describe('and the snippet has no <em> tags (query did not match this field)', () => {
+    it('should return undefined so the caller omits the pseudo-highlight', () => {
+      expect(asHighlight('Epic Party Night')).toBeUndefined()
+    })
+  })
+
+  describe('and the snippet is an empty string or null', () => {
+    it('should return undefined', () => {
+      expect(asHighlight('')).toBeUndefined()
+      expect(asHighlight(null)).toBeUndefined()
     })
   })
 })

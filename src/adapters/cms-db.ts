@@ -31,7 +31,7 @@ export type ListedEntry = Entry & { _rank?: number; _highlight?: SearchHighlight
  * the first fragment of the raw text with no markup. A "highlight" without `<em>` would
  * mislead consumers, so we only treat a snippet as a highlight when the tag is present.
  */
-function asHighlight(snippet: string | null): string | undefined {
+export function asHighlight(snippet: string | null): string | undefined {
   if (snippet && snippet.includes('<em>')) return snippet
   return undefined
 }
@@ -42,8 +42,19 @@ export interface ListResult {
   total: number
 }
 
-/** Per-locale lookup for the text search config and column names used for FTS + fuzzy match. */
-const LOCALE_FTS: Record<string, { config: string; tsvector: string; text: string } | undefined> = {
+/**
+ * Per-locale lookup for the text search config and column names used for FTS + fuzzy match.
+ * Literal-union typing ensures the values can only be the three known configs/columns so a
+ * typo or widening at a call site is a compile error, and makes clear that SQL interpolation
+ * of these identifiers is safe.
+ */
+interface LocaleFtsConfig {
+  config: 'english' | 'spanish' | 'simple'
+  tsvector: 'search_vector_en_us' | 'search_vector_es' | 'search_vector_zh'
+  text: 'search_text_en_us' | 'search_text_es' | 'search_text_zh'
+}
+
+const LOCALE_FTS: Record<string, LocaleFtsConfig | undefined> = {
   'en-US': { config: 'english', tsvector: 'search_vector_en_us', text: 'search_text_en_us' },
   es: { config: 'spanish', tsvector: 'search_vector_es', text: 'search_text_es' },
   zh: { config: 'simple', tsvector: 'search_vector_zh', text: 'search_text_zh' }

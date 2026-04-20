@@ -7,20 +7,39 @@ export const shorthands: ColumnDefinitions | undefined = undefined
 // Strategy: helper SQL functions extract plain text from Contentful rich-text JSON.
 // - GENERATED STORED tsvector columns power exact/prefix matching (via @@ + to_tsquery) with GIN indexes.
 // - GENERATED STORED text columns alongside them power typo-tolerant matching via pg_trgm's
-//   word_similarity(), with GIN trigram indexes for future LIKE/% use cases.
+//   word_similarity(), called inline in the WHERE clause at query time.
 // Because the columns are GENERATED, existing rows are populated automatically by ALTER TABLE
 // and webhook/bulk-sync upserts don't need any code changes to stay in sync.
+//
+// Operational note: ALTER TABLE ... ADD COLUMN ... GENERATED ALWAYS AS (...) STORED rewrites
+// the whole table under an ACCESS EXCLUSIVE lock, and the CREATE INDEX statements below each
+// hold a SHARE lock. The blog tables are small (low hundreds of rows today), so this runs in
+// well under a second; if that ever changes, deploy with a brief maintenance window or switch
+// to CREATE INDEX CONCURRENTLY (which requires noTransaction mode in node-pg-migrate).
 
 export async function up(pgm: MigrationBuilder): Promise<void> {
   pgm.sql(`CREATE EXTENSION IF NOT EXISTS pg_trgm`)
 
   // Walks a Contentful rich-text Document and concatenates every `value` field
-  // found under a node with `nodeType == "text"`.
+  // found under a node with `nodeType == "text"`. Uses a recursive CTE over
+  // jsonb_array_elements rather than jsonb_path_query because the latter is
+  // classified as STABLE in PostgreSQL (even though it's effectively
+  // deterministic for a given input), and generated STORED columns require
+  // genuinely IMMUTABLE expressions. jsonb_array_elements and jsonb_typeof are
+  // both IMMUTABLE, so this function's volatility classification is accurate.
   pgm.sql(`
     CREATE OR REPLACE FUNCTION cms_rich_text_to_plain(doc jsonb)
     RETURNS text AS $$
-      SELECT coalesce(string_agg(v #>> '{}', ' '), '')
-      FROM jsonb_path_query(doc, 'strict $.** ? (@.nodeType == "text").value') AS v;
+      WITH RECURSIVE nodes(node) AS (
+        SELECT doc WHERE jsonb_typeof(doc) = 'object'
+        UNION ALL
+        SELECT child
+        FROM nodes, jsonb_array_elements(node->'content') AS child
+        WHERE jsonb_typeof(node->'content') = 'array'
+      )
+      SELECT coalesce(string_agg(node->>'value', ' '), '')
+      FROM nodes
+      WHERE node->>'nodeType' = 'text';
     $$ LANGUAGE sql IMMUTABLE;
   `)
 
@@ -86,9 +105,6 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
   pgm.sql(`CREATE INDEX idx_cms_blog_posts_search_en_us ON cms_blog_posts USING GIN (search_vector_en_us)`)
   pgm.sql(`CREATE INDEX idx_cms_blog_posts_search_es    ON cms_blog_posts USING GIN (search_vector_es)`)
   pgm.sql(`CREATE INDEX idx_cms_blog_posts_search_zh    ON cms_blog_posts USING GIN (search_vector_zh)`)
-  pgm.sql(`CREATE INDEX idx_cms_blog_posts_trgm_en_us ON cms_blog_posts USING GIN (search_text_en_us gin_trgm_ops)`)
-  pgm.sql(`CREATE INDEX idx_cms_blog_posts_trgm_es    ON cms_blog_posts USING GIN (search_text_es    gin_trgm_ops)`)
-  pgm.sql(`CREATE INDEX idx_cms_blog_posts_trgm_zh    ON cms_blog_posts USING GIN (search_text_zh    gin_trgm_ops)`)
 
   // Per-locale generated tsvector + trigram text columns on cms_blog_authors.
   pgm.sql(`
@@ -109,9 +125,6 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
   pgm.sql(`CREATE INDEX idx_cms_blog_authors_search_en_us ON cms_blog_authors USING GIN (search_vector_en_us)`)
   pgm.sql(`CREATE INDEX idx_cms_blog_authors_search_es    ON cms_blog_authors USING GIN (search_vector_es)`)
   pgm.sql(`CREATE INDEX idx_cms_blog_authors_search_zh    ON cms_blog_authors USING GIN (search_vector_zh)`)
-  pgm.sql(`CREATE INDEX idx_cms_blog_authors_trgm_en_us ON cms_blog_authors USING GIN (search_text_en_us gin_trgm_ops)`)
-  pgm.sql(`CREATE INDEX idx_cms_blog_authors_trgm_es    ON cms_blog_authors USING GIN (search_text_es    gin_trgm_ops)`)
-  pgm.sql(`CREATE INDEX idx_cms_blog_authors_trgm_zh    ON cms_blog_authors USING GIN (search_text_zh    gin_trgm_ops)`)
 
   // Per-locale generated tsvector + trigram text columns on cms_blog_categories.
   pgm.sql(`
@@ -132,21 +145,9 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
   pgm.sql(`CREATE INDEX idx_cms_blog_categories_search_en_us ON cms_blog_categories USING GIN (search_vector_en_us)`)
   pgm.sql(`CREATE INDEX idx_cms_blog_categories_search_es    ON cms_blog_categories USING GIN (search_vector_es)`)
   pgm.sql(`CREATE INDEX idx_cms_blog_categories_search_zh    ON cms_blog_categories USING GIN (search_vector_zh)`)
-  pgm.sql(
-    `CREATE INDEX idx_cms_blog_categories_trgm_en_us ON cms_blog_categories USING GIN (search_text_en_us gin_trgm_ops)`
-  )
-  pgm.sql(
-    `CREATE INDEX idx_cms_blog_categories_trgm_es    ON cms_blog_categories USING GIN (search_text_es    gin_trgm_ops)`
-  )
-  pgm.sql(
-    `CREATE INDEX idx_cms_blog_categories_trgm_zh    ON cms_blog_categories USING GIN (search_text_zh    gin_trgm_ops)`
-  )
 }
 
 export async function down(pgm: MigrationBuilder): Promise<void> {
-  pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_categories_trgm_zh`)
-  pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_categories_trgm_es`)
-  pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_categories_trgm_en_us`)
   pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_categories_search_zh`)
   pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_categories_search_es`)
   pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_categories_search_en_us`)
@@ -160,9 +161,6 @@ export async function down(pgm: MigrationBuilder): Promise<void> {
       DROP COLUMN IF EXISTS search_vector_en_us;
   `)
 
-  pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_authors_trgm_zh`)
-  pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_authors_trgm_es`)
-  pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_authors_trgm_en_us`)
   pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_authors_search_zh`)
   pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_authors_search_es`)
   pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_authors_search_en_us`)
@@ -176,9 +174,6 @@ export async function down(pgm: MigrationBuilder): Promise<void> {
       DROP COLUMN IF EXISTS search_vector_en_us;
   `)
 
-  pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_posts_trgm_zh`)
-  pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_posts_trgm_es`)
-  pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_posts_trgm_en_us`)
   pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_posts_search_zh`)
   pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_posts_search_es`)
   pgm.sql(`DROP INDEX IF EXISTS idx_cms_blog_posts_search_en_us`)
