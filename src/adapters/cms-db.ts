@@ -32,12 +32,20 @@ export interface ListResult {
   total: number
 }
 
-/** Per-locale lookup for the text search config and column name used for FTS. */
-const LOCALE_FTS: Record<string, { config: string; column: string } | undefined> = {
-  'en-US': { config: 'english', column: 'search_vector_en_us' },
-  es: { config: 'spanish', column: 'search_vector_es' },
-  zh: { config: 'simple', column: 'search_vector_zh' }
+/** Per-locale lookup for the text search config and column names used for FTS + fuzzy match. */
+const LOCALE_FTS: Record<string, { config: string; tsvector: string; text: string } | undefined> = {
+  'en-US': { config: 'english', tsvector: 'search_vector_en_us', text: 'search_text_en_us' },
+  es: { config: 'spanish', tsvector: 'search_vector_es', text: 'search_text_es' },
+  zh: { config: 'simple', tsvector: 'search_vector_zh', text: 'search_text_zh' }
 }
+
+/**
+ * Minimum word_similarity (pg_trgm) required for a row to be considered a fuzzy match.
+ * 0.4 catches typical single-character typos on short words (e.g. "partyy" → "party",
+ * "rusti" → "rust") while keeping multi-word AND semantics intact — at lower thresholds
+ * a query like "dance party" would fuzzy-match rows that contain only "participate".
+ */
+const FUZZY_SIMILARITY_THRESHOLD = 0.4
 
 /**
  * Sanitizes a user-supplied search string and converts it into a `to_tsquery`-compatible
@@ -261,8 +269,8 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     const { locale, slug, category, author, q, limit, skip } = opts
     const tsqueryString = q ? buildPrefixTsQuery(q) : null
 
-    if (tsqueryString) {
-      return listBlogPostsWithSearch(space, environment, opts, tsqueryString)
+    if (tsqueryString && q) {
+      return listBlogPostsWithSearch(space, environment, opts, tsqueryString, q)
     }
 
     const fromClause = `
@@ -310,7 +318,8 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     space: string,
     environment: string,
     opts: ListBlogOptions,
-    tsqueryString: string
+    tsqueryString: string,
+    rawQuery: string
   ): Promise<ListResult> {
     const { locale, slug, category, author, limit, skip } = opts
     const fts = LOCALE_FTS[locale]
@@ -318,7 +327,7 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
       // Unknown locale: return an empty result set rather than crashing.
       return { items: [], total: 0 }
     }
-    const { config, column } = fts
+    const { config, tsvector, text: textCol } = fts
 
     // Always join the post's referenced author/category (by id) so their search vectors
     // and headline text are available. A second pair of joins (`cat_slug`, `auth_slug`)
@@ -338,62 +347,70 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
       AND auth_slug.space = $1 AND auth_slug.environment = $2
       AND auth_slug.slug @> jsonb_build_object($4::text, $5::text)`
 
+    // A row qualifies if the tsquery hits any of the three vectors OR the raw query is
+    // trigram-similar to any of the three searchable text fields (typo tolerance).
     const whereClause = `
     bp.space = $1 AND bp.environment = $2
     AND ($3::text IS NULL OR bp.category_id = cat_slug.id)
     AND ($5::text IS NULL OR bp.author_id = auth_slug.id)
     AND ($6::text IS NULL OR bp.slug @> jsonb_build_object($4::text, $6::text))
     AND (
-      bp.${column} @@ tq
-      OR bp_auth.${column} @@ tq
-      OR bp_cat.${column} @@ tq
+      bp.${tsvector} @@ tq
+      OR bp_auth.${tsvector} @@ tq
+      OR bp_cat.${tsvector} @@ tq
+      OR word_similarity($8::text, coalesce(bp.${textCol}, '')) >= ${FUZZY_SIMILARITY_THRESHOLD}
+      OR word_similarity($8::text, coalesce(bp_auth.${textCol}, '')) >= ${FUZZY_SIMILARITY_THRESHOLD}
+      OR word_similarity($8::text, coalesce(bp_cat.${textCol}, '')) >= ${FUZZY_SIMILARITY_THRESHOLD}
     )`
 
-    const params = [space, environment, category || null, locale, author || null, slug || null, tsqueryString]
+    const params = [space, environment, category || null, locale, author || null, slug || null, tsqueryString, rawQuery]
 
+    // ts_rank dominates when the FTS predicate matches; the trigram term is scaled down
+    // so exact/prefix hits always outrank typo-only hits, but typo hits still get a signal.
     const rankExpr = `
-      ts_rank(bp.${column}, tq)
-      + 0.5 * ts_rank(coalesce(bp_auth.${column}, ''::tsvector), tq)
-      + 0.5 * ts_rank(coalesce(bp_cat.${column}, ''::tsvector), tq)`
+      CASE WHEN bp.${tsvector} @@ tq THEN ts_rank(bp.${tsvector}, tq) ELSE 0 END
+      + CASE WHEN bp_auth.${tsvector} @@ tq THEN 0.5 * ts_rank(bp_auth.${tsvector}, tq) ELSE 0 END
+      + CASE WHEN bp_cat.${tsvector} @@ tq THEN 0.5 * ts_rank(bp_cat.${tsvector}, tq) ELSE 0 END
+      + 0.3 * GREATEST(
+          word_similarity($8::text, coalesce(bp.${textCol}, '')),
+          word_similarity($8::text, coalesce(bp_auth.${textCol}, '')),
+          word_similarity($8::text, coalesce(bp_cat.${textCol}, ''))
+        )`
 
     const headlineOpts = 'StartSel=<em>, StopSel=</em>, MaxFragments=2, MaxWords=20, MinWords=5'
     const headlineTitleOpts = 'StartSel=<em>, StopSel=</em>, MaxFragments=1, MaxWords=30, MinWords=1, HighlightAll=TRUE'
 
-    const [countResult, itemsResult] = await Promise.all([
-      pool().query({
-        text: `WITH q AS (SELECT to_tsquery('${config}', $7) AS tq)
-               SELECT count(*) AS total FROM ${fromClause} CROSS JOIN q WHERE ${whereClause}`,
-        values: params,
-        name: `list_posts_search_count_${locale}`
-      }),
-      pool().query({
-        text: `WITH q AS (SELECT to_tsquery('${config}', $7) AS tq)
-               SELECT
-                 bp.content,
-                 (${rankExpr}) AS rank,
-                 ts_headline('${config}',
-                   coalesce(bp.content->'fields'->'title'->>$4::text, ''),
-                   tq,
-                   '${headlineTitleOpts}'
-                 ) AS highlight_title,
-                 ts_headline('${config}',
-                   coalesce(bp.content->'fields'->'description'->>$4::text, ''),
-                   tq,
-                   '${headlineOpts}'
-                 ) AS highlight_description,
-                 ts_headline('${config}',
-                   cms_rich_text_to_plain(bp.content->'fields'->'body'->$4::text),
-                   tq,
-                   '${headlineOpts}'
-                 ) AS highlight_body
-               FROM ${fromClause} CROSS JOIN q
-               WHERE ${whereClause}
-               ORDER BY rank DESC, bp.published_date_sort DESC NULLS LAST
-               OFFSET $8 LIMIT $9`,
-        values: [...params, skip, limit],
-        name: `list_posts_search_items_${locale}`
-      })
-    ])
+    // One round-trip. count(*) OVER () returns the pre-LIMIT total on every row, so we
+    // avoid issuing a second identical query just to get the count — the WHERE clause,
+    // joins, tsquery materialization and per-row rank are computed once.
+    const itemsResult = await pool().query({
+      text: `WITH q AS (SELECT to_tsquery('${config}', $7) AS tq)
+             SELECT
+               bp.content,
+               (${rankExpr}) AS rank,
+               count(*) OVER () AS total,
+               ts_headline('${config}',
+                 coalesce(bp.content->'fields'->'title'->>$4::text, ''),
+                 tq,
+                 '${headlineTitleOpts}'
+               ) AS highlight_title,
+               ts_headline('${config}',
+                 coalesce(bp.content->'fields'->'description'->>$4::text, ''),
+                 tq,
+                 '${headlineOpts}'
+               ) AS highlight_description,
+               ts_headline('${config}',
+                 cms_rich_text_to_plain(bp.content->'fields'->'body'->$4::text),
+                 tq,
+                 '${headlineOpts}'
+               ) AS highlight_body
+             FROM ${fromClause} CROSS JOIN q
+             WHERE ${whereClause}
+             ORDER BY rank DESC, bp.published_date_sort DESC NULLS LAST
+             OFFSET $9 LIMIT $10`,
+      values: [...params, skip, limit],
+      name: `list_posts_search_${locale}`
+    })
 
     const items: ListedEntry[] = itemsResult.rows.map(
       (r: {
@@ -415,10 +432,23 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
       }
     )
 
-    return {
-      items,
-      total: parseInt(countResult.rows[0].total, 10)
+    // When LIMIT truncates to 0 rows we still need the pre-limit total — that's what the
+    // second query (below) is for. We only hit it in the offset-past-the-end case, so in
+    // the common path this branch is free.
+    let total: number
+    if (itemsResult.rows.length > 0) {
+      total = parseInt(itemsResult.rows[0].total as string, 10)
+    } else {
+      const countResult = await pool().query({
+        text: `WITH q AS (SELECT to_tsquery('${config}', $7) AS tq)
+               SELECT count(*) AS total FROM ${fromClause} CROSS JOIN q WHERE ${whereClause}`,
+        values: params,
+        name: `list_posts_search_count_${locale}`
+      })
+      total = parseInt(countResult.rows[0].total, 10)
     }
+
+    return { items, total }
   }
 
   async function listBlogCategories(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult> {

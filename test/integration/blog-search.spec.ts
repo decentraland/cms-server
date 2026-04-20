@@ -252,4 +252,62 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
       expect(body.items).toHaveLength(0)
     })
   })
+
+  describe('and q has a typo (extra character) in a title word', () => {
+    it('should still match the intended post via trigram similarity', async () => {
+      const response = await components.localFetch.fetch(
+        `/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/posts?q=partyy`
+      )
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      const ids = body.items.map((item: { fields: { id: string } }) => item.fields.id)
+      expect(ids).toContain('epic-party-night')
+    })
+  })
+
+  describe('and q has a typo in a body word', () => {
+    it('should still match the post containing the correctly spelled word', async () => {
+      const response = await components.localFetch.fetch(
+        `/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/posts?q=rusti`
+      )
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      const ids = body.items.map((item: { fields: { id: string } }) => item.fields.id)
+      expect(ids).toContain('rust-deep-dive')
+    })
+  })
+
+  describe('and q has a typo in an author name', () => {
+    it('should still match posts by that author', async () => {
+      const response = await components.localFetch.fetch(
+        `/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/posts?q=janey`
+      )
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      const ids = body.items.map((item: { fields: { id: string } }) => item.fields.id)
+      expect(ids).toContain('article-by-jane')
+    })
+  })
+
+  describe('and an exact FTS match coexists with fuzzy candidates', () => {
+    it('should rank the exact match above the fuzzy match', async () => {
+      const response = await components.localFetch.fetch(
+        `/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/posts?q=party`
+      )
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(body.items[0].fields.id).toBe('epic-party-night')
+    })
+  })
+
+  describe('and q is nonsense unrelated to any post', () => {
+    it('should not over-match via fuzzy similarity', async () => {
+      const response = await components.localFetch.fetch(
+        `/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/posts?q=qqqwwweeerrr`
+      )
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(body.total).toBe(0)
+    })
+  })
 })
