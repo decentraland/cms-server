@@ -510,12 +510,15 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
       return listed
     })
 
-    // When LIMIT truncates to 0 rows we still need the pre-limit total — that's what the
-    // second query (below) is for. We only hit it in the offset-past-the-end case, so in
-    // the common path this branch is free.
+    // count(*) OVER () inlines the total on every row, but when LIMIT returns zero rows
+    // we have two cases: (a) WHERE matched nothing — skip=0, total is definitively 0;
+    // (b) offset past the end — total > 0 but this page is empty. Only (b) needs a
+    // separate count query, so we skip the round-trip entirely in case (a).
     let total: number
     if (itemsResult.rows.length > 0) {
       total = parseInt(itemsResult.rows[0].total, 10)
+    } else if (skip === 0) {
+      total = 0
     } else {
       const countResult = await pool().query({
         text: `WITH q AS (SELECT to_tsquery('${config}', $7) AS tq)
