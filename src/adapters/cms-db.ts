@@ -529,7 +529,19 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     return { items, total }
   }
 
-  async function listBlogCategories(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult> {
+  /**
+   * Shared implementation for listBlogCategories / listBlogAuthors. Both tables have the
+   * same row shape (content jsonb + localized slug/title) and the same listing semantics
+   * (paginated, optional slug filter, sorted by en-US title). Only the table name and
+   * prepared-statement identifier differ between callers.
+   */
+  async function listBlogRef(
+    table: 'cms_blog_categories' | 'cms_blog_authors',
+    preparedName: 'list_categories' | 'list_authors',
+    space: string,
+    environment: string,
+    opts: ListBlogOptions
+  ): Promise<ListResult> {
     const { locale, slug, limit, skip } = opts
 
     const whereClause = `space = $1 AND environment = $2
@@ -538,17 +550,17 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
 
     const [countResult, itemsResult] = await Promise.all([
       pool().query({
-        text: `SELECT count(*) AS total FROM cms_blog_categories WHERE ${whereClause}`,
+        text: `SELECT count(*) AS total FROM ${table} WHERE ${whereClause}`,
         values: params,
-        name: 'list_categories_count'
+        name: `${preparedName}_count`
       }),
       pool().query({
-        text: `SELECT content FROM cms_blog_categories
+        text: `SELECT content FROM ${table}
        WHERE ${whereClause}
        ORDER BY title->>'en-US' ASC
        OFFSET $5 LIMIT $6`,
         values: [...params, skip, limit],
-        name: 'list_categories_items'
+        name: `${preparedName}_items`
       })
     ])
 
@@ -558,33 +570,12 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     }
   }
 
+  async function listBlogCategories(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult> {
+    return listBlogRef('cms_blog_categories', 'list_categories', space, environment, opts)
+  }
+
   async function listBlogAuthors(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult> {
-    const { locale, slug, limit, skip } = opts
-
-    const whereClause = `space = $1 AND environment = $2
-    AND ($3::text IS NULL OR slug @> jsonb_build_object($4::text, $3::text))`
-    const params = [space, environment, slug || null, locale]
-
-    const [countResult, itemsResult] = await Promise.all([
-      pool().query({
-        text: `SELECT count(*) AS total FROM cms_blog_authors WHERE ${whereClause}`,
-        values: params,
-        name: 'list_authors_count'
-      }),
-      pool().query({
-        text: `SELECT content FROM cms_blog_authors
-       WHERE ${whereClause}
-       ORDER BY title->>'en-US' ASC
-       OFFSET $5 LIMIT $6`,
-        values: [...params, skip, limit],
-        name: 'list_authors_items'
-      })
-    ])
-
-    return {
-      items: itemsResult.rows.map((r: { content: Entry }) => r.content),
-      total: parseInt(countResult.rows[0].total, 10)
-    }
+    return listBlogRef('cms_blog_authors', 'list_authors', space, environment, opts)
   }
 
   async function getLastSync(space: string, environment: string): Promise<Date | null> {
