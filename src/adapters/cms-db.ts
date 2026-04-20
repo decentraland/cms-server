@@ -79,6 +79,38 @@ const FUZZY_SIMILARITY_THRESHOLD = 0.4
 const FUZZY_MIN_QUERY_LENGTH = 4
 
 /**
+ * Rank weights mixed into the search ORDER BY expression. Posts get full ts_rank; an
+ * author/category match via a JOINed row is downweighted by REF_RANK_WEIGHT so a post
+ * whose own title matches still outranks a sibling post whose only link to the query is
+ * through its author or category name. FUZZY_RANK_WEIGHT scales the trigram similarity
+ * contribution so exact FTS hits always dominate typo-only hits.
+ */
+const REF_RANK_WEIGHT = 0.5
+const FUZZY_RANK_WEIGHT = 0.3
+
+/**
+ * SQL fragments for the slug/category/author filter, shared between the plain and search
+ * paths. The joined aliases are non-populating unless the corresponding filter param is
+ * present. Both fragments assume the param layout:
+ *   $1 = space, $2 = environment, $3 = category (slug or null), $4 = locale,
+ *   $5 = author (slug or null), $6 = post slug (or null)
+ */
+const SLUG_FILTER_JOINS = `
+  LEFT JOIN cms_blog_categories cat_slug
+    ON $3::text IS NOT NULL
+    AND cat_slug.space = $1 AND cat_slug.environment = $2
+    AND cat_slug.slug @> jsonb_build_object($4::text, $3::text)
+  LEFT JOIN cms_blog_authors auth_slug
+    ON $5::text IS NOT NULL
+    AND auth_slug.space = $1 AND auth_slug.environment = $2
+    AND auth_slug.slug @> jsonb_build_object($4::text, $5::text)`
+
+const SLUG_FILTER_WHERES = `
+  AND ($3::text IS NULL OR bp.category_id = cat_slug.id)
+  AND ($5::text IS NULL OR bp.author_id = auth_slug.id)
+  AND ($6::text IS NULL OR bp.slug @> jsonb_build_object($4::text, $6::text))`
+
+/**
  * Sanitizes a user-supplied search string and converts it into a `to_tsquery`-compatible
  * prefix query. Returns `null` if the input contains no usable tokens.
  * Each whitespace-separated token becomes a prefix term joined by `&`, e.g. `"party time"`
@@ -341,23 +373,8 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
   async function listBlogPostsPlain(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult> {
     const { locale, slug, category, author, limit, skip } = opts
 
-    const fromClause = `
-    cms_blog_posts bp
-    LEFT JOIN cms_blog_categories cat
-      ON $3::text IS NOT NULL
-      AND cat.space = $1 AND cat.environment = $2
-      AND cat.slug @> jsonb_build_object($4::text, $3::text)
-    LEFT JOIN cms_blog_authors auth
-      ON $5::text IS NOT NULL
-      AND auth.space = $1 AND auth.environment = $2
-      AND auth.slug @> jsonb_build_object($4::text, $5::text)`
-
-    const whereClause = `
-    bp.space = $1 AND bp.environment = $2
-    AND ($3::text IS NULL OR bp.category_id = cat.id)
-    AND ($5::text IS NULL OR bp.author_id = auth.id)
-    AND ($6::text IS NULL OR bp.slug @> jsonb_build_object($4::text, $6::text))`
-
+    const fromClause = `cms_blog_posts bp ${SLUG_FILTER_JOINS}`
+    const whereClause = `bp.space = $1 AND bp.environment = $2 ${SLUG_FILTER_WHERES}`
     const params = [space, environment, category || null, locale, author || null, slug || null]
 
     const [countResult, itemsResult] = await Promise.all([
@@ -406,31 +423,22 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     // query length.
     const fuzzyProbe = rawQuery.length >= FUZZY_MIN_QUERY_LENGTH ? rawQuery : ''
 
-    // Always join the post's referenced author/category (by id) so their search vectors
-    // and headline text are available. A second pair of joins (`cat_slug`, `auth_slug`)
-    // supports the existing category= / author= slug filters without breaking them.
+    // `bp_auth` / `bp_cat` are the post's referenced author/category (by id), needed so
+    // their search vectors and headline text are available to FTS/fuzzy matching.
+    // SLUG_FILTER_JOINS adds `cat_slug` / `auth_slug` for the existing category= /
+    // author= slug filters.
     const fromClause = `
     cms_blog_posts bp
     LEFT JOIN cms_blog_authors bp_auth
       ON bp_auth.space = bp.space AND bp_auth.environment = bp.environment AND bp_auth.id = bp.author_id
     LEFT JOIN cms_blog_categories bp_cat
       ON bp_cat.space = bp.space AND bp_cat.environment = bp.environment AND bp_cat.id = bp.category_id
-    LEFT JOIN cms_blog_categories cat_slug
-      ON $3::text IS NOT NULL
-      AND cat_slug.space = $1 AND cat_slug.environment = $2
-      AND cat_slug.slug @> jsonb_build_object($4::text, $3::text)
-    LEFT JOIN cms_blog_authors auth_slug
-      ON $5::text IS NOT NULL
-      AND auth_slug.space = $1 AND auth_slug.environment = $2
-      AND auth_slug.slug @> jsonb_build_object($4::text, $5::text)`
+    ${SLUG_FILTER_JOINS}`
 
     // A row qualifies if the tsquery hits any of the three vectors OR the raw query is
     // trigram-similar to any of the three searchable text fields (typo tolerance).
     const whereClause = `
-    bp.space = $1 AND bp.environment = $2
-    AND ($3::text IS NULL OR bp.category_id = cat_slug.id)
-    AND ($5::text IS NULL OR bp.author_id = auth_slug.id)
-    AND ($6::text IS NULL OR bp.slug @> jsonb_build_object($4::text, $6::text))
+    bp.space = $1 AND bp.environment = $2 ${SLUG_FILTER_WHERES}
     AND (
       bp.${tsvector} @@ tq
       OR bp_auth.${tsvector} @@ tq
@@ -455,9 +463,9 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     // so exact/prefix hits always outrank typo-only hits, but typo hits still get a signal.
     const rankExpr = `
       CASE WHEN bp.${tsvector} @@ tq THEN ts_rank(bp.${tsvector}, tq) ELSE 0 END
-      + CASE WHEN bp_auth.${tsvector} @@ tq THEN 0.5 * ts_rank(bp_auth.${tsvector}, tq) ELSE 0 END
-      + CASE WHEN bp_cat.${tsvector} @@ tq THEN 0.5 * ts_rank(bp_cat.${tsvector}, tq) ELSE 0 END
-      + 0.3 * GREATEST(
+      + CASE WHEN bp_auth.${tsvector} @@ tq THEN ${REF_RANK_WEIGHT} * ts_rank(bp_auth.${tsvector}, tq) ELSE 0 END
+      + CASE WHEN bp_cat.${tsvector} @@ tq THEN ${REF_RANK_WEIGHT} * ts_rank(bp_cat.${tsvector}, tq) ELSE 0 END
+      + ${FUZZY_RANK_WEIGHT} * GREATEST(
           word_similarity($8::text, coalesce(bp.${textCol}, '')),
           word_similarity($8::text, coalesce(bp_auth.${textCol}, '')),
           word_similarity($8::text, coalesce(bp_cat.${textCol}, ''))

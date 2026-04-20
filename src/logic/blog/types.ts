@@ -1,4 +1,4 @@
-import type { ListedEntry, SearchHighlight } from '../../adapters/cms-db'
+import type { ListedEntry } from '../../adapters/cms-db'
 import type { Locale } from '../localization/types'
 
 /** Pre-validated params for the blog listing logic. */
@@ -16,11 +16,10 @@ export interface BlogListParams {
 }
 
 /**
- * The logic layer exposes the adapter-level entry shape under domain names. Aliasing
+ * The logic layer exposes the adapter-level entry shape under its domain name. Aliasing
  * (rather than redeclaring) keeps a single source of truth for `_rank` / `_highlight`
  * so the two layers can't drift.
  */
-export type BlogPostHighlight = SearchHighlight
 export type BlogListItem = ListedEntry
 
 export interface BlogListResult {
