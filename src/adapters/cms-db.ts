@@ -91,6 +91,41 @@ export function buildPrefixTsQuery(raw: string): string | null {
   return tokens.map((t) => `${t}:*`).join(' & ')
 }
 
+/** ts_headline options shared by description and body snippets (2 fragments, up to 20 words each). */
+const HEADLINE_OPTS = 'StartSel=<em>, StopSel=</em>, MaxFragments=2, MaxWords=20, MinWords=5'
+
+/**
+ * ts_headline options for the title. HighlightAll=TRUE returns the entire title with
+ * matches wrapped, so short titles aren't truncated into a fragment.
+ */
+const HEADLINE_TITLE_OPTS = 'StartSel=<em>, StopSel=</em>, MaxFragments=1, MaxWords=30, MinWords=1, HighlightAll=TRUE'
+
+interface SearchRow {
+  content: Entry
+  rank: string | number
+  highlight_title: string | null
+  highlight_description: string | null
+  highlight_body: string | null
+}
+
+/** ts_rank results can come back as `numeric` (string) — normalize to number. */
+function parseRank(rank: string | number): number {
+  return typeof rank === 'string' ? parseFloat(rank) : rank
+}
+
+/** Assembles a `_highlight` object from ts_headline snippets, or `undefined` if nothing matched. */
+function buildHighlight(row: SearchRow): SearchHighlight | undefined {
+  const title = asHighlight(row.highlight_title)
+  const description = asHighlight(row.highlight_description)
+  const body = asHighlight(row.highlight_body)
+  if (!title && !description && !body) return undefined
+  const highlight: SearchHighlight = {}
+  if (title) highlight.title = title
+  if (description) highlight.description = description
+  if (body) highlight.body = body
+  return highlight
+}
+
 /** Minimal database client interface used for transactional queries. */
 export interface DatabaseClient {
   query(sql: string, params?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }>
@@ -297,12 +332,14 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
   }
 
   async function listBlogPosts(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult> {
-    const { locale, slug, category, author, q, limit, skip } = opts
-    const tsqueryString = q ? buildPrefixTsQuery(q) : null
+    const tsqueryString = opts.q ? buildPrefixTsQuery(opts.q) : null
+    return tsqueryString
+      ? listBlogPostsWithSearch(space, environment, opts, tsqueryString)
+      : listBlogPostsPlain(space, environment, opts)
+  }
 
-    if (tsqueryString && q) {
-      return listBlogPostsWithSearch(space, environment, opts, tsqueryString, q)
-    }
+  async function listBlogPostsPlain(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult> {
+    const { locale, slug, category, author, limit, skip } = opts
 
     const fromClause = `
     cms_blog_posts bp
@@ -349,8 +386,7 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     space: string,
     environment: string,
     opts: ListBlogOptions,
-    tsqueryString: string,
-    rawQuery: string
+    tsqueryString: string
   ): Promise<ListResult> {
     const { locale, slug, category, author, limit, skip } = opts
     const fts = LOCALE_FTS[locale]
@@ -359,6 +395,9 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
       return { items: [], total: 0 }
     }
     const { config, tsvector, text: textCol } = fts
+
+    // Caller derived tsqueryString from opts.q, so q is guaranteed non-null here.
+    const rawQuery = opts.q as string
 
     // Disable fuzzy matching on short queries by passing an empty string as the fuzzy
     // probe: word_similarity('', anything) returns 0, which is below the threshold, so
@@ -424,13 +463,10 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
           word_similarity($8::text, coalesce(bp_cat.${textCol}, ''))
         )`
 
-    const headlineOpts = 'StartSel=<em>, StopSel=</em>, MaxFragments=2, MaxWords=20, MinWords=5'
-    const headlineTitleOpts = 'StartSel=<em>, StopSel=</em>, MaxFragments=1, MaxWords=30, MinWords=1, HighlightAll=TRUE'
-
     // One round-trip. count(*) OVER () returns the pre-LIMIT total on every row, so we
     // avoid issuing a second identical query just to get the count — the WHERE clause,
     // joins, tsquery materialization and per-row rank are computed once.
-    const itemsResult = await pool().query({
+    const itemsResult = await pool().query<SearchRow & { total: string }>({
       text: `WITH q AS (SELECT to_tsquery('${config}', $7) AS tq)
              SELECT
                bp.content,
@@ -439,17 +475,17 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
                ts_headline('${config}',
                  coalesce(bp.content->'fields'->'title'->>$4::text, ''),
                  tq,
-                 '${headlineTitleOpts}'
+                 '${HEADLINE_TITLE_OPTS}'
                ) AS highlight_title,
                ts_headline('${config}',
                  coalesce(bp.content->'fields'->'description'->>$4::text, ''),
                  tq,
-                 '${headlineOpts}'
+                 '${HEADLINE_OPTS}'
                ) AS highlight_description,
                ts_headline('${config}',
                  cms_rich_text_to_plain(bp.content->'fields'->'body'->$4::text),
                  tq,
-                 '${headlineOpts}'
+                 '${HEADLINE_OPTS}'
                ) AS highlight_body
              FROM ${fromClause} CROSS JOIN q
              WHERE ${whereClause}
@@ -459,37 +495,19 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
       name: `list_posts_search_${locale}`
     })
 
-    const items: ListedEntry[] = itemsResult.rows.map(
-      (r: {
-        content: Entry
-        rank: string | number
-        highlight_title: string | null
-        highlight_description: string | null
-        highlight_body: string | null
-      }) => {
-        const title = asHighlight(r.highlight_title)
-        const description = asHighlight(r.highlight_description)
-        const body = asHighlight(r.highlight_body)
-        const listed: ListedEntry = {
-          ...r.content,
-          _rank: typeof r.rank === 'string' ? parseFloat(r.rank) : r.rank
-        }
-        if (title || description || body) {
-          listed._highlight = {}
-          if (title) listed._highlight.title = title
-          if (description) listed._highlight.description = description
-          if (body) listed._highlight.body = body
-        }
-        return listed
-      }
-    )
+    const items: ListedEntry[] = itemsResult.rows.map((r) => {
+      const listed: ListedEntry = { ...r.content, _rank: parseRank(r.rank) }
+      const highlight = buildHighlight(r)
+      if (highlight) listed._highlight = highlight
+      return listed
+    })
 
     // When LIMIT truncates to 0 rows we still need the pre-limit total — that's what the
     // second query (below) is for. We only hit it in the offset-past-the-end case, so in
     // the common path this branch is free.
     let total: number
     if (itemsResult.rows.length > 0) {
-      total = parseInt(itemsResult.rows[0].total as string, 10)
+      total = parseInt(itemsResult.rows[0].total, 10)
     } else {
       const countResult = await pool().query({
         text: `WITH q AS (SELECT to_tsquery('${config}', $7) AS tq)
