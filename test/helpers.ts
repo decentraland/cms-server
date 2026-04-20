@@ -120,11 +120,20 @@ export function createBlogPostEntry(
     bodyText?: string
     bodyTextEs?: string
     publishedDate?: string
-    categoryId?: string
-    authorId?: string
+    categoryId?: string | null
+    authorId?: string | null
   } = {}
 ): Record<string, unknown> {
   const id = overrides.id || 'post-1'
+  // Support explicit null to seed posts without a category/author reference.
+  const categoryRef =
+    overrides.categoryId === null
+      ? {}
+      : { 'en-US': { sys: { id: overrides.categoryId || 'cat-1', type: 'Link', linkType: 'Entry' } } }
+  const authorRef =
+    overrides.authorId === null
+      ? {}
+      : { 'en-US': { sys: { id: overrides.authorId || 'author-1', type: 'Link', linkType: 'Entry' } } }
   return {
     sys: {
       id,
@@ -159,12 +168,8 @@ export function createBlogPostEntry(
         zh: '2024-01-15T00:00:00.000Z'
       },
       image: { 'en-US': { sys: { id: 'img-1', type: 'Link', linkType: 'Asset' } } },
-      category: overrides.categoryId
-        ? { 'en-US': { sys: { id: overrides.categoryId, type: 'Link', linkType: 'Entry' } } }
-        : { 'en-US': { sys: { id: 'cat-1', type: 'Link', linkType: 'Entry' } } },
-      author: overrides.authorId
-        ? { 'en-US': { sys: { id: overrides.authorId, type: 'Link', linkType: 'Entry' } } }
-        : { 'en-US': { sys: { id: 'author-1', type: 'Link', linkType: 'Entry' } } }
+      category: categoryRef,
+      author: authorRef
     }
   }
 }

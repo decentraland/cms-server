@@ -108,6 +108,18 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
       bodyText: 'We pass by a lighthouse on the way',
       publishedDate: '2024-02-25T00:00:00.000Z'
     })
+    // A post with no author or category reference, to prove the LEFT JOINs handle NULL
+    // refs correctly and the post still matches on its own fields.
+    const postOrphan = createBlogPostEntry({
+      id: 'post-orphan',
+      slug: 'orphan-article',
+      title: 'Zephyr Chronicles',
+      description: 'An unattached piece',
+      bodyText: 'Standalone content with no references',
+      authorId: null,
+      categoryId: null,
+      publishedDate: '2024-01-05T00:00:00.000Z'
+    })
 
     for (const entry of [
       techCategory,
@@ -121,7 +133,8 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
       postEvents,
       postEsOnly,
       postLighthouseTitle,
-      postLighthouseBody
+      postLighthouseBody,
+      postOrphan
     ]) {
       await postWebhook(entry)
     }
@@ -246,7 +259,7 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
       )
       expect(response.status).toBe(200)
       const body = await response.json()
-      expect(body.total).toBe(8)
+      expect(body.total).toBe(9)
       expect(body.items[0]._rank).toBeUndefined()
     })
   })
@@ -368,6 +381,19 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
       expect(bodyPos).toBeGreaterThanOrEqual(0)
       expect(titlePos).toBeLessThan(bodyPos)
       expect(body.items[titlePos]._rank).toBeGreaterThan(body.items[bodyPos]._rank)
+    })
+  })
+
+  describe('and a matching post has no author or category reference', () => {
+    it('should still match via its own title/description/body fields', async () => {
+      const response = await components.localFetch.fetch(
+        `/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/posts?q=zephyr`
+      )
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(body.total).toBe(1)
+      expect(body.items[0].fields.id).toBe('orphan-article')
+      expect(body.items[0]._highlight.title).toContain('<em>')
     })
   })
 
