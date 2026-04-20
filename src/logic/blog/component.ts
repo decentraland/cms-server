@@ -1,7 +1,7 @@
 import { localizeFields } from '../localization'
-import type { BlogListParams, BlogListResult } from './types'
+import type { BlogListItem, BlogListParams, BlogListResult } from './types'
+import type { ListResult } from '../../adapters/cms-db'
 import type { AppComponents } from '../../types'
-import type { Entry } from 'contentful'
 
 /**
  * Lists blog content (posts, categories, or authors) with filtering, pagination, and localization.
@@ -14,11 +14,11 @@ export async function listBlog(
 ): Promise<BlogListResult> {
   const { cmsDb, logs } = components
   const logger = logs.getLogger('blog')
-  const { space, environment, type, locale, slug, category, author, limit, skip } = params
+  const { space, environment, type, locale, slug, category, author, q, limit, skip } = params
 
-  const listOpts = { locale, slug, category, author, limit, skip }
+  const listOpts = { locale, slug, category, author, q, limit, skip }
 
-  let result: { items: Entry[]; total: number }
+  let result: ListResult
   switch (type) {
     case 'posts':
       result = await cmsDb.listBlogPosts(space, environment, listOpts)
@@ -31,11 +31,11 @@ export async function listBlog(
       break
   }
 
-  const items = result.items.map((entry: Entry) => ({
+  const items = result.items.map((entry) => ({
     ...entry,
     sys: { ...entry.sys, locale },
     fields: localizeFields(entry.fields, locale)
-  })) as Entry[]
+  })) as BlogListItem[]
 
   logger.log('Blog listing loaded', { type, count: String(items.length), total: String(result.total) })
 

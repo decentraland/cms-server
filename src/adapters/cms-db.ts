@@ -11,14 +11,45 @@ export interface ListBlogOptions {
   slug?: string | null
   category?: string | null
   author?: string | null
+  q?: string | null
   limit: number
   skip: number
 }
 
+/** `<em>`-wrapped snippets produced by ts_headline when a search query is supplied. */
+export interface SearchHighlight {
+  title?: string
+  description?: string
+  body?: string
+}
+
+/** An Entry optionally annotated with FTS rank/highlight metadata when `q` is present. */
+export type ListedEntry = Entry & { _rank?: number; _highlight?: SearchHighlight }
+
 /** Result of a blog listing query. */
 export interface ListResult {
-  items: Entry[]
+  items: ListedEntry[]
   total: number
+}
+
+/** Per-locale lookup for the text search config and column name used for FTS. */
+const LOCALE_FTS: Record<string, { config: string; column: string } | undefined> = {
+  'en-US': { config: 'english', column: 'search_vector_en_us' },
+  es: { config: 'spanish', column: 'search_vector_es' },
+  zh: { config: 'simple', column: 'search_vector_zh' }
+}
+
+/**
+ * Sanitizes a user-supplied search string and converts it into a `to_tsquery`-compatible
+ * prefix query. Returns `null` if the input contains no usable tokens.
+ * Each whitespace-separated token becomes a prefix term joined by `&`, e.g. `"party time"`
+ * → `"party:* & time:*"`, matching Algolia's prefix-search UX.
+ */
+export function buildPrefixTsQuery(raw: string): string | null {
+  const sanitized = raw.normalize('NFC').replace(/[^\p{L}\p{N}\s]/gu, ' ')
+  const tokens = sanitized.split(/\s+/).filter((t) => t.length > 0)
+  if (tokens.length === 0) return null
+  return tokens.map((t) => `${t}:*`).join(' & ')
 }
 
 /** Minimal database client interface used for transactional queries. */
@@ -227,7 +258,12 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
   }
 
   async function listBlogPosts(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult> {
-    const { locale, slug, category, author, limit, skip } = opts
+    const { locale, slug, category, author, q, limit, skip } = opts
+    const tsqueryString = q ? buildPrefixTsQuery(q) : null
+
+    if (tsqueryString) {
+      return listBlogPostsWithSearch(space, environment, opts, tsqueryString)
+    }
 
     const fromClause = `
     cms_blog_posts bp
@@ -266,6 +302,121 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
 
     return {
       items: itemsResult.rows.map((r: { content: Entry }) => r.content),
+      total: parseInt(countResult.rows[0].total, 10)
+    }
+  }
+
+  async function listBlogPostsWithSearch(
+    space: string,
+    environment: string,
+    opts: ListBlogOptions,
+    tsqueryString: string
+  ): Promise<ListResult> {
+    const { locale, slug, category, author, limit, skip } = opts
+    const fts = LOCALE_FTS[locale]
+    if (!fts) {
+      // Unknown locale: return an empty result set rather than crashing.
+      return { items: [], total: 0 }
+    }
+    const { config, column } = fts
+
+    // Always join the post's referenced author/category (by id) so their search vectors
+    // and headline text are available. A second pair of joins (`cat_slug`, `auth_slug`)
+    // supports the existing category= / author= slug filters without breaking them.
+    const fromClause = `
+    cms_blog_posts bp
+    LEFT JOIN cms_blog_authors bp_auth
+      ON bp_auth.space = bp.space AND bp_auth.environment = bp.environment AND bp_auth.id = bp.author_id
+    LEFT JOIN cms_blog_categories bp_cat
+      ON bp_cat.space = bp.space AND bp_cat.environment = bp.environment AND bp_cat.id = bp.category_id
+    LEFT JOIN cms_blog_categories cat_slug
+      ON $3::text IS NOT NULL
+      AND cat_slug.space = $1 AND cat_slug.environment = $2
+      AND cat_slug.slug @> jsonb_build_object($4::text, $3::text)
+    LEFT JOIN cms_blog_authors auth_slug
+      ON $5::text IS NOT NULL
+      AND auth_slug.space = $1 AND auth_slug.environment = $2
+      AND auth_slug.slug @> jsonb_build_object($4::text, $5::text)`
+
+    const whereClause = `
+    bp.space = $1 AND bp.environment = $2
+    AND ($3::text IS NULL OR bp.category_id = cat_slug.id)
+    AND ($5::text IS NULL OR bp.author_id = auth_slug.id)
+    AND ($6::text IS NULL OR bp.slug @> jsonb_build_object($4::text, $6::text))
+    AND (
+      bp.${column} @@ tq
+      OR bp_auth.${column} @@ tq
+      OR bp_cat.${column} @@ tq
+    )`
+
+    const params = [space, environment, category || null, locale, author || null, slug || null, tsqueryString]
+
+    const rankExpr = `
+      ts_rank(bp.${column}, tq)
+      + 0.5 * ts_rank(coalesce(bp_auth.${column}, ''::tsvector), tq)
+      + 0.5 * ts_rank(coalesce(bp_cat.${column}, ''::tsvector), tq)`
+
+    const headlineOpts = 'StartSel=<em>, StopSel=</em>, MaxFragments=2, MaxWords=20, MinWords=5'
+    const headlineTitleOpts = 'StartSel=<em>, StopSel=</em>, MaxFragments=1, MaxWords=30, MinWords=1, HighlightAll=TRUE'
+
+    const [countResult, itemsResult] = await Promise.all([
+      pool().query({
+        text: `WITH q AS (SELECT to_tsquery('${config}', $7) AS tq)
+               SELECT count(*) AS total FROM ${fromClause} CROSS JOIN q WHERE ${whereClause}`,
+        values: params,
+        name: `list_posts_search_count_${locale}`
+      }),
+      pool().query({
+        text: `WITH q AS (SELECT to_tsquery('${config}', $7) AS tq)
+               SELECT
+                 bp.content,
+                 (${rankExpr}) AS rank,
+                 ts_headline('${config}',
+                   coalesce(bp.content->'fields'->'title'->>$4::text, ''),
+                   tq,
+                   '${headlineTitleOpts}'
+                 ) AS highlight_title,
+                 ts_headline('${config}',
+                   coalesce(bp.content->'fields'->'description'->>$4::text, ''),
+                   tq,
+                   '${headlineOpts}'
+                 ) AS highlight_description,
+                 ts_headline('${config}',
+                   cms_rich_text_to_plain(bp.content->'fields'->'body'->$4::text),
+                   tq,
+                   '${headlineOpts}'
+                 ) AS highlight_body
+               FROM ${fromClause} CROSS JOIN q
+               WHERE ${whereClause}
+               ORDER BY rank DESC, bp.published_date_sort DESC NULLS LAST
+               OFFSET $8 LIMIT $9`,
+        values: [...params, skip, limit],
+        name: `list_posts_search_items_${locale}`
+      })
+    ])
+
+    const items: ListedEntry[] = itemsResult.rows.map(
+      (r: {
+        content: Entry
+        rank: string | number
+        highlight_title: string | null
+        highlight_description: string | null
+        highlight_body: string | null
+      }) => {
+        const highlight: SearchHighlight = {}
+        if (r.highlight_title) highlight.title = r.highlight_title
+        if (r.highlight_description) highlight.description = r.highlight_description
+        if (r.highlight_body) highlight.body = r.highlight_body
+        return {
+          ...r.content,
+          _rank: typeof r.rank === 'string' ? parseFloat(r.rank) : r.rank,
+          _highlight: highlight
+        }
+      }
+    )
+
+    return {
+      items,
       total: parseInt(countResult.rows[0].total, 10)
     }
   }

@@ -60,6 +60,22 @@ test('when receiving a webhook event', ({ components }) => {
       expect(row.category_id).toBe('cat-1')
       expect(row.author_id).toBe('author-1')
     })
+
+    it('should populate per-locale search_vector generated columns', async () => {
+      const result = await components.pg.query<{
+        en_vec: string | null
+        es_vec: string | null
+        zh_vec: string | null
+      }>(
+        SQL`SELECT search_vector_en_us::text AS en_vec, search_vector_es::text AS es_vec, search_vector_zh::text AS zh_vec
+            FROM cms_blog_posts WHERE space = ${TEST_SPACE} AND environment = ${TEST_ENVIRONMENT} AND id = 'post-1'`
+      )
+      const row = result.rows[0]
+      expect(row.en_vec).not.toBeNull()
+      expect(row.en_vec).toContain('test')
+      expect(row.es_vec).not.toBeNull()
+      expect(row.es_vec).toContain('prueb')
+    })
   })
 
   describe('and a blog post is unpublished', () => {

@@ -40,6 +40,8 @@ export async function blogHandler(
     const slug = url.searchParams.get('slug')
     const category = url.searchParams.get('category')
     const author = url.searchParams.get('author')
+    const qRaw = url.searchParams.get('q')
+    const q = qRaw === null ? null : qRaw.trim()
     const limitRaw = parseInt(url.searchParams.get('limit') || '20')
     const skipRaw = parseInt(url.searchParams.get('skip') || '0')
     const limit = Number.isNaN(limitRaw) ? 20 : Math.min(limitRaw, 100)
@@ -47,6 +49,10 @@ export async function blogHandler(
 
     if (!slug && (limit < 1 || skip < 0)) {
       throw new BadRequestError('Invalid pagination parameters')
+    }
+
+    if (q !== null && q.length > 200) {
+      throw new BadRequestError('Search query is too long')
     }
 
     const result = await listBlog(components, {
@@ -57,6 +63,7 @@ export async function blogHandler(
       slug,
       category,
       author,
+      q: q && q.length > 0 ? q : null,
       limit,
       skip
     })
