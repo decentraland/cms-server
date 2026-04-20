@@ -45,15 +45,37 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
     $$ LANGUAGE sql IMMUTABLE;
   `)
 
+  // Weighted tsvector builders. ts_rank multiplies contributions by the weight class
+  // (A=1.0, B=0.4, C=0.2 with default weights), so title hits naturally outrank body hits
+  // and author/category hits correspondingly show up lower in the ranking than post hits.
+  pgm.sql(`
+    CREATE OR REPLACE FUNCTION cms_blog_post_weighted_tsv(content jsonb, locale text, cfg regconfig)
+    RETURNS tsvector AS $$
+      SELECT
+        setweight(to_tsvector(cfg, coalesce(content->'fields'->'title'->>locale, '')), 'A') ||
+        setweight(to_tsvector(cfg, coalesce(content->'fields'->'description'->>locale, '')), 'B') ||
+        setweight(to_tsvector(cfg, cms_rich_text_to_plain(content->'fields'->'body'->locale)), 'C');
+    $$ LANGUAGE sql IMMUTABLE;
+  `)
+
+  pgm.sql(`
+    CREATE OR REPLACE FUNCTION cms_blog_ref_weighted_tsv(content jsonb, locale text, cfg regconfig)
+    RETURNS tsvector AS $$
+      SELECT
+        setweight(to_tsvector(cfg, coalesce(content->'fields'->'title'->>locale, '')), 'A') ||
+        setweight(to_tsvector(cfg, coalesce(content->'fields'->'description'->>locale, '')), 'B');
+    $$ LANGUAGE sql IMMUTABLE;
+  `)
+
   // Per-locale generated tsvector + trigram text columns on cms_blog_posts.
   pgm.sql(`
     ALTER TABLE cms_blog_posts
       ADD COLUMN search_vector_en_us tsvector
-        GENERATED ALWAYS AS (to_tsvector('english', cms_blog_post_search_text(content, 'en-US'))) STORED,
+        GENERATED ALWAYS AS (cms_blog_post_weighted_tsv(content, 'en-US', 'english')) STORED,
       ADD COLUMN search_vector_es tsvector
-        GENERATED ALWAYS AS (to_tsvector('spanish', cms_blog_post_search_text(content, 'es'))) STORED,
+        GENERATED ALWAYS AS (cms_blog_post_weighted_tsv(content, 'es',    'spanish')) STORED,
       ADD COLUMN search_vector_zh tsvector
-        GENERATED ALWAYS AS (to_tsvector('simple',  cms_blog_post_search_text(content, 'zh'))) STORED,
+        GENERATED ALWAYS AS (cms_blog_post_weighted_tsv(content, 'zh',    'simple')) STORED,
       ADD COLUMN search_text_en_us text
         GENERATED ALWAYS AS (cms_blog_post_search_text(content, 'en-US')) STORED,
       ADD COLUMN search_text_es text
@@ -72,11 +94,11 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
   pgm.sql(`
     ALTER TABLE cms_blog_authors
       ADD COLUMN search_vector_en_us tsvector
-        GENERATED ALWAYS AS (to_tsvector('english', cms_blog_ref_search_text(content, 'en-US'))) STORED,
+        GENERATED ALWAYS AS (cms_blog_ref_weighted_tsv(content, 'en-US', 'english')) STORED,
       ADD COLUMN search_vector_es tsvector
-        GENERATED ALWAYS AS (to_tsvector('spanish', cms_blog_ref_search_text(content, 'es'))) STORED,
+        GENERATED ALWAYS AS (cms_blog_ref_weighted_tsv(content, 'es',    'spanish')) STORED,
       ADD COLUMN search_vector_zh tsvector
-        GENERATED ALWAYS AS (to_tsvector('simple',  cms_blog_ref_search_text(content, 'zh'))) STORED,
+        GENERATED ALWAYS AS (cms_blog_ref_weighted_tsv(content, 'zh',    'simple')) STORED,
       ADD COLUMN search_text_en_us text
         GENERATED ALWAYS AS (cms_blog_ref_search_text(content, 'en-US')) STORED,
       ADD COLUMN search_text_es text
@@ -95,11 +117,11 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
   pgm.sql(`
     ALTER TABLE cms_blog_categories
       ADD COLUMN search_vector_en_us tsvector
-        GENERATED ALWAYS AS (to_tsvector('english', cms_blog_ref_search_text(content, 'en-US'))) STORED,
+        GENERATED ALWAYS AS (cms_blog_ref_weighted_tsv(content, 'en-US', 'english')) STORED,
       ADD COLUMN search_vector_es tsvector
-        GENERATED ALWAYS AS (to_tsvector('spanish', cms_blog_ref_search_text(content, 'es'))) STORED,
+        GENERATED ALWAYS AS (cms_blog_ref_weighted_tsv(content, 'es',    'spanish')) STORED,
       ADD COLUMN search_vector_zh tsvector
-        GENERATED ALWAYS AS (to_tsvector('simple',  cms_blog_ref_search_text(content, 'zh'))) STORED,
+        GENERATED ALWAYS AS (cms_blog_ref_weighted_tsv(content, 'zh',    'simple')) STORED,
       ADD COLUMN search_text_en_us text
         GENERATED ALWAYS AS (cms_blog_ref_search_text(content, 'en-US')) STORED,
       ADD COLUMN search_text_es text
@@ -170,6 +192,8 @@ export async function down(pgm: MigrationBuilder): Promise<void> {
       DROP COLUMN IF EXISTS search_vector_en_us;
   `)
 
+  pgm.sql(`DROP FUNCTION IF EXISTS cms_blog_ref_weighted_tsv(jsonb, text, regconfig)`)
+  pgm.sql(`DROP FUNCTION IF EXISTS cms_blog_post_weighted_tsv(jsonb, text, regconfig)`)
   pgm.sql(`DROP FUNCTION IF EXISTS cms_blog_ref_search_text(jsonb, text)`)
   pgm.sql(`DROP FUNCTION IF EXISTS cms_blog_post_search_text(jsonb, text)`)
   pgm.sql(`DROP FUNCTION IF EXISTS cms_rich_text_to_plain(jsonb)`)

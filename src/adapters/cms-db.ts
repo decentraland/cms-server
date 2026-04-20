@@ -26,6 +26,16 @@ export interface SearchHighlight {
 /** An Entry optionally annotated with FTS rank/highlight metadata when `q` is present. */
 export type ListedEntry = Entry & { _rank?: number; _highlight?: SearchHighlight }
 
+/**
+ * ts_headline always returns a string — if the query doesn't match the field it returns
+ * the first fragment of the raw text with no markup. A "highlight" without `<em>` would
+ * mislead consumers, so we only treat a snippet as a highlight when the tag is present.
+ */
+function asHighlight(snippet: string | null): string | undefined {
+  if (snippet && snippet.includes('<em>')) return snippet
+  return undefined
+}
+
 /** Result of a blog listing query. */
 export interface ListResult {
   items: ListedEntry[]
@@ -420,15 +430,20 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
         highlight_description: string | null
         highlight_body: string | null
       }) => {
-        const highlight: SearchHighlight = {}
-        if (r.highlight_title) highlight.title = r.highlight_title
-        if (r.highlight_description) highlight.description = r.highlight_description
-        if (r.highlight_body) highlight.body = r.highlight_body
-        return {
+        const title = asHighlight(r.highlight_title)
+        const description = asHighlight(r.highlight_description)
+        const body = asHighlight(r.highlight_body)
+        const listed: ListedEntry = {
           ...r.content,
-          _rank: typeof r.rank === 'string' ? parseFloat(r.rank) : r.rank,
-          _highlight: highlight
+          _rank: typeof r.rank === 'string' ? parseFloat(r.rank) : r.rank
         }
+        if (title || description || body) {
+          listed._highlight = {}
+          if (title) listed._highlight.title = title
+          if (description) listed._highlight.description = description
+          if (body) listed._highlight.body = body
+        }
+        return listed
       }
     )
 

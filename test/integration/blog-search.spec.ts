@@ -275,6 +275,15 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
       const ids = body.items.map((item: { fields: { id: string } }) => item.fields.id)
       expect(ids).toContain('rust-deep-dive')
     })
+
+    it('should not emit a _highlight object when only fuzzy similarity matched', async () => {
+      const response = await components.localFetch.fetch(
+        `/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/posts?q=rusti`
+      )
+      const body = await response.json()
+      const rustItem = body.items.find((item: { fields: { id: string } }) => item.fields.id === 'rust-deep-dive')
+      expect(rustItem._highlight).toBeUndefined()
+    })
   })
 
   describe('and q has a typo in an author name', () => {
