@@ -158,6 +158,18 @@ function buildHighlight(row: SearchRow): SearchHighlight | undefined {
   return highlight
 }
 
+/**
+ * PostgreSQL error code for a syntax error. `to_tsquery` raises this when a token survives
+ * our sanitizer but can't be parsed as a tsquery lexeme (rare edge cases involving certain
+ * combining Unicode sequences or future tokenizer changes). We treat it as "no results"
+ * rather than surfacing a 500 to the caller.
+ */
+const PG_SYNTAX_ERROR = '42601'
+
+function isTsQuerySyntaxError(err: unknown): boolean {
+  return !!err && typeof err === 'object' && 'code' in err && (err as { code: unknown }).code === PG_SYNTAX_ERROR
+}
+
 /** Minimal database client interface used for transactional queries. */
 export interface DatabaseClient {
   query(sql: string, params?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }>
@@ -364,10 +376,14 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
   }
 
   async function listBlogPosts(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult> {
-    const tsqueryString = opts.q ? buildPrefixTsQuery(opts.q) : null
-    return tsqueryString
-      ? listBlogPostsWithSearch(space, environment, opts, tsqueryString)
-      : listBlogPostsPlain(space, environment, opts)
+    const q = opts.q
+    if (q) {
+      const tsqueryString = buildPrefixTsQuery(q)
+      if (tsqueryString) {
+        return listBlogPostsWithSearch(space, environment, opts, tsqueryString, q)
+      }
+    }
+    return listBlogPostsPlain(space, environment, opts)
   }
 
   async function listBlogPostsPlain(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult> {
@@ -403,7 +419,8 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     space: string,
     environment: string,
     opts: ListBlogOptions,
-    tsqueryString: string
+    tsqueryString: string,
+    rawQuery: string
   ): Promise<ListResult> {
     const { locale, slug, category, author, limit, skip } = opts
     const fts = LOCALE_FTS[locale]
@@ -412,9 +429,6 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
       return { items: [], total: 0 }
     }
     const { config, tsvector, text: textCol } = fts
-
-    // Caller derived tsqueryString from opts.q, so q is guaranteed non-null here.
-    const rawQuery = opts.q as string
 
     // Disable fuzzy matching on short queries by passing an empty string as the fuzzy
     // probe: word_similarity('', anything) returns 0, which is below the threshold, so
@@ -474,34 +488,42 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     // One round-trip. count(*) OVER () returns the pre-LIMIT total on every row, so we
     // avoid issuing a second identical query just to get the count — the WHERE clause,
     // joins, tsquery materialization and per-row rank are computed once.
-    const itemsResult = await pool().query<SearchRow & { total: string }>({
-      text: `WITH q AS (SELECT to_tsquery('${config}', $7) AS tq)
-             SELECT
-               bp.content,
-               (${rankExpr}) AS rank,
-               count(*) OVER () AS total,
-               ts_headline('${config}',
-                 coalesce(bp.content->'fields'->'title'->>$4::text, ''),
-                 tq,
-                 '${HEADLINE_TITLE_OPTS}'
-               ) AS highlight_title,
-               ts_headline('${config}',
-                 coalesce(bp.content->'fields'->'description'->>$4::text, ''),
-                 tq,
-                 '${HEADLINE_OPTS}'
-               ) AS highlight_description,
-               ts_headline('${config}',
-                 cms_rich_text_to_plain(bp.content->'fields'->'body'->$4::text),
-                 tq,
-                 '${HEADLINE_OPTS}'
-               ) AS highlight_body
-             FROM ${fromClause} CROSS JOIN q
-             WHERE ${whereClause}
-             ORDER BY rank DESC, bp.published_date_sort DESC NULLS LAST
-             OFFSET $9 LIMIT $10`,
-      values: [...params, skip, limit],
-      name: `list_posts_search_${locale}`
-    })
+    // to_tsquery can raise 42601 on exotic Unicode tokens that slip past the sanitizer;
+    // we treat that as "no results" instead of bubbling up as a 500.
+    let itemsResult: { rows: Array<SearchRow & { total: string }> }
+    try {
+      itemsResult = await pool().query<SearchRow & { total: string }>({
+        text: `WITH q AS (SELECT to_tsquery('${config}', $7) AS tq)
+               SELECT
+                 bp.content,
+                 (${rankExpr}) AS rank,
+                 count(*) OVER () AS total,
+                 ts_headline('${config}',
+                   coalesce(bp.content->'fields'->'title'->>$4::text, ''),
+                   tq,
+                   '${HEADLINE_TITLE_OPTS}'
+                 ) AS highlight_title,
+                 ts_headline('${config}',
+                   coalesce(bp.content->'fields'->'description'->>$4::text, ''),
+                   tq,
+                   '${HEADLINE_OPTS}'
+                 ) AS highlight_description,
+                 ts_headline('${config}',
+                   cms_rich_text_to_plain(bp.content->'fields'->'body'->$4::text),
+                   tq,
+                   '${HEADLINE_OPTS}'
+                 ) AS highlight_body
+               FROM ${fromClause} CROSS JOIN q
+               WHERE ${whereClause}
+               ORDER BY rank DESC, bp.published_date_sort DESC NULLS LAST
+               OFFSET $9 LIMIT $10`,
+        values: [...params, skip, limit],
+        name: `list_posts_search_${locale}`
+      })
+    } catch (err) {
+      if (isTsQuerySyntaxError(err)) return { items: [], total: 0 }
+      throw err
+    }
 
     const items: ListedEntry[] = itemsResult.rows.map((r) => {
       const listed: ListedEntry = { ...r.content, _rank: parseRank(r.rank) }
@@ -520,13 +542,18 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     } else if (skip === 0) {
       total = 0
     } else {
-      const countResult = await pool().query({
-        text: `WITH q AS (SELECT to_tsquery('${config}', $7) AS tq)
-               SELECT count(*) AS total FROM ${fromClause} CROSS JOIN q WHERE ${whereClause}`,
-        values: params,
-        name: `list_posts_search_count_${locale}`
-      })
-      total = parseInt(countResult.rows[0].total, 10)
+      try {
+        const countResult = await pool().query({
+          text: `WITH q AS (SELECT to_tsquery('${config}', $7) AS tq)
+                 SELECT count(*) AS total FROM ${fromClause} CROSS JOIN q WHERE ${whereClause}`,
+          values: params,
+          name: `list_posts_search_count_${locale}`
+        })
+        total = parseInt(countResult.rows[0].total, 10)
+      } catch (err) {
+        if (isTsQuerySyntaxError(err)) return { items: [], total: 0 }
+        throw err
+      }
     }
 
     return { items, total }

@@ -120,6 +120,15 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
       categoryId: null,
       publishedDate: '2024-01-05T00:00:00.000Z'
     })
+    // A post with a distinctive Chinese title so we can exercise the zh locale end-to-end
+    // with a token that doesn't overlap the helper's default zh title.
+    const postCjk = createBlogPostEntry({
+      id: 'post-cjk',
+      slug: 'cjk-article',
+      title: 'CJK Sample',
+      titleZh: '分布式城市探索',
+      publishedDate: '2024-01-03T00:00:00.000Z'
+    })
 
     for (const entry of [
       techCategory,
@@ -134,7 +143,8 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
       postEsOnly,
       postLighthouseTitle,
       postLighthouseBody,
-      postOrphan
+      postOrphan,
+      postCjk
     ]) {
       await postWebhook(entry)
     }
@@ -229,6 +239,18 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
     })
   })
 
+  describe('and q is a CJK token with locale=zh', () => {
+    it('should match posts whose zh tsvector contains the token via the simple text-search config', async () => {
+      const q = encodeURIComponent('分布式城市')
+      const response = await components.localFetch.fetch(
+        `/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/posts?q=${q}&locale=zh`
+      )
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(body.items.map((item: { sys: { id: string } }) => item.sys.id)).toContain('post-cjk')
+    })
+  })
+
   describe('and the same Spanish-only query is run with locale=en-US', () => {
     it('should not match because the English fields do not contain the word', async () => {
       const response = await components.localFetch.fetch(
@@ -259,7 +281,7 @@ test('when searching blog posts with a q query parameter', ({ components }) => {
       )
       expect(response.status).toBe(200)
       const body = await response.json()
-      expect(body.total).toBe(9)
+      expect(body.total).toBe(10)
       expect(body.items[0]._rank).toBeUndefined()
     })
   })
