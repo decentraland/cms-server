@@ -6,6 +6,18 @@ import { BadRequestError, NotFoundError } from '../../types/errors'
 import { mapErrorToResponse } from '../error-mapper'
 import type { HandlerContextWithPath } from '../../types'
 
+const MAX_SEARCH_QUERY_LENGTH = 200
+
+/** Parses the `q` query param: trimmed non-empty string, or null. Throws for over-length. */
+function parseSearchQuery(raw: string | null): string | null {
+  if (raw === null) return null
+  const trimmed = raw.trim()
+  if (trimmed.length > MAX_SEARCH_QUERY_LENGTH) {
+    throw new BadRequestError('Search query is too long')
+  }
+  return trimmed.length > 0 ? trimmed : null
+}
+
 /**
  * Handles blog listing requests (posts, categories, authors).
  * Validates space/environment, parses query parameters, and returns paginated results.
@@ -40,6 +52,7 @@ export async function blogHandler(
     const slug = url.searchParams.get('slug')
     const category = url.searchParams.get('category')
     const author = url.searchParams.get('author')
+    const q = parseSearchQuery(url.searchParams.get('q'))
     const limitRaw = parseInt(url.searchParams.get('limit') || '20')
     const skipRaw = parseInt(url.searchParams.get('skip') || '0')
     const limit = Number.isNaN(limitRaw) ? 20 : Math.min(limitRaw, 100)
@@ -57,6 +70,7 @@ export async function blogHandler(
       slug,
       category,
       author,
+      q,
       limit,
       skip
     })

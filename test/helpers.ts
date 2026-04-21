@@ -93,17 +93,47 @@ export async function insertLastSync(
 
 // ─── Test Data Factories (full Contentful shape) ─────────────────────────────
 
+/** Builds a minimal Contentful rich-text Document containing a single paragraph with `text`. */
+function richTextParagraph(text: string): Record<string, unknown> {
+  return {
+    nodeType: 'document',
+    content: [
+      {
+        nodeType: 'paragraph',
+        content: [{ nodeType: 'text', value: text, marks: [], data: {} }],
+        data: {}
+      }
+    ],
+    data: {}
+  }
+}
+
 export function createBlogPostEntry(
   overrides: {
     id?: string
     slug?: string
     title?: string
+    titleEs?: string
+    titleZh?: string
+    description?: string
+    descriptionEs?: string
+    bodyText?: string
+    bodyTextEs?: string
     publishedDate?: string
-    categoryId?: string
-    authorId?: string
+    categoryId?: string | null
+    authorId?: string | null
   } = {}
 ): Record<string, unknown> {
   const id = overrides.id || 'post-1'
+  // Support explicit null to seed posts without a category/author reference.
+  const categoryRef =
+    overrides.categoryId === null
+      ? {}
+      : { 'en-US': { sys: { id: overrides.categoryId || 'cat-1', type: 'Link', linkType: 'Entry' } } }
+  const authorRef =
+    overrides.authorId === null
+      ? {}
+      : { 'en-US': { sys: { id: overrides.authorId || 'author-1', type: 'Link', linkType: 'Entry' } } }
   return {
     sys: {
       id,
@@ -117,11 +147,19 @@ export function createBlogPostEntry(
     },
     fields: {
       id: { 'en-US': overrides.slug || 'test-post', es: 'test-post-es', zh: 'test-post-zh' },
-      title: { 'en-US': overrides.title || 'Test Post', es: 'Publicación de Prueba', zh: '测试帖子' },
-      description: { 'en-US': 'A test post', es: 'Una publicación de prueba', zh: '测试帖子' },
+      title: {
+        'en-US': overrides.title || 'Test Post',
+        es: overrides.titleEs || 'Publicación de Prueba',
+        zh: overrides.titleZh || '测试帖子'
+      },
+      description: {
+        'en-US': overrides.description || 'A test post',
+        es: overrides.descriptionEs || 'Una publicación de prueba',
+        zh: '测试帖子'
+      },
       body: {
-        'en-US': { nodeType: 'document', content: [] },
-        es: { nodeType: 'document', content: [] },
+        'en-US': overrides.bodyText ? richTextParagraph(overrides.bodyText) : { nodeType: 'document', content: [] },
+        es: overrides.bodyTextEs ? richTextParagraph(overrides.bodyTextEs) : { nodeType: 'document', content: [] },
         zh: { nodeType: 'document', content: [] }
       },
       publishedDate: {
@@ -130,12 +168,8 @@ export function createBlogPostEntry(
         zh: '2024-01-15T00:00:00.000Z'
       },
       image: { 'en-US': { sys: { id: 'img-1', type: 'Link', linkType: 'Asset' } } },
-      category: overrides.categoryId
-        ? { 'en-US': { sys: { id: overrides.categoryId, type: 'Link', linkType: 'Entry' } } }
-        : { 'en-US': { sys: { id: 'cat-1', type: 'Link', linkType: 'Entry' } } },
-      author: overrides.authorId
-        ? { 'en-US': { sys: { id: overrides.authorId, type: 'Link', linkType: 'Entry' } } }
-        : { 'en-US': { sys: { id: 'author-1', type: 'Link', linkType: 'Entry' } } }
+      category: categoryRef,
+      author: authorRef
     }
   }
 }
@@ -223,6 +257,7 @@ export function makeBlogListParams(overrides: Record<string, unknown> = {}): Rec
     slug: null,
     category: null,
     author: null,
+    q: null,
     limit: 10,
     skip: 0,
     ...overrides
