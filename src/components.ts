@@ -37,8 +37,7 @@ export async function initComponents(): Promise<AppComponents> {
           'http://localhost:5173',
           'http://localhost:5174',
           /^https:\/\/[a-z0-9-]+-decentraland1\.vercel\.app$/,
-          /^https:\/\/landing-site-[a-z0-9-]+\.vercel\.app$/,
-          /^https:\/\/blog-site-[a-z0-9-]+\.vercel\.app$/
+          /^https:\/\/sites-[a-z0-9-]+\.vercel\.app$/
         ],
         methods: ['GET', 'POST', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization', 'X-Contentful-Topic', 'If-None-Match'],
