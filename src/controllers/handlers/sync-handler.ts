@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto'
-import type { IHttpServerComponent } from '@well-known-components/interfaces'
+import type { IHttpServerComponent } from '@dcl/core-commons'
 import { syncAll, syncEntry } from '../../logic/sync'
 import { BadRequestError, NotFoundError, UnauthorizedError } from '../../types/errors'
 import { mapErrorToResponse } from '../error-mapper'

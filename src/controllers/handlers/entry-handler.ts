@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto'
-import type { IHttpServerComponent } from '@well-known-components/interfaces'
+import type { IHttpServerComponent } from '@dcl/core-commons'
 import { getEntry, getLocales } from '../../logic/entry'
 import { parseLocale } from '../../logic/localization'
 import { fromPlural } from '../../types/contentful'

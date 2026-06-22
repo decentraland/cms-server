@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto'
-import type { IHttpServerComponent } from '@well-known-components/interfaces'
+import type { IHttpServerComponent } from '@dcl/core-commons'
 import { processWebhook } from '../../logic/webhook'
 import { toEntryType } from '../../types/contentful'
 import { BadRequestError, NotFoundError, UnauthorizedError } from '../../types/errors'

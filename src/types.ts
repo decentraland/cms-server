@@ -1,11 +1,10 @@
 import type {
   IBaseComponent,
   IConfigComponent,
-  IFetchComponent,
-  IHttpServerComponent,
   ILoggerComponent,
   IMetricsComponent
 } from '@well-known-components/interfaces'
+import type { IFetchComponent, IHttpServerComponent } from '@dcl/core-commons'
 import type { IPgComponent } from '@dcl/pg-component'
 import type { ISchemaValidatorComponent } from '@dcl/schema-validator-component'
 import type { ICmsDatabaseComponent } from './adapters/cms-db'
@@ -45,7 +44,7 @@ export type AppComponents = BaseComponents & {
 
 // components used in tests
 export type TestComponents = BaseComponents & {
-  // A fetch component that only hits the test server
+  // A fetch component that only hits the test server, provided by @dcl/test-helpers.
   localFetch: IFetchComponent
 }
 
