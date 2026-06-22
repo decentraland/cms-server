@@ -1,4 +1,5 @@
-import type { IHttpServerComponent, ILoggerComponent } from '@well-known-components/interfaces'
+import type { ILoggerComponent } from '@well-known-components/interfaces'
+import type { IHttpServerComponent } from '@dcl/core-commons'
 import { EntryNotFoundError } from '../logic/entry/errors'
 import { RateLimitError } from '../logic/sync/errors'
 import { BadRequestError, NotFoundError, UnauthorizedError } from '../types/errors'

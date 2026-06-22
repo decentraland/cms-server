@@ -1,15 +1,12 @@
 import { resolve } from 'path'
 import { createDotEnvConfigComponent } from '@well-known-components/env-config-provider'
-import { createFetchComponent } from '@well-known-components/fetch-component'
 import { createLogComponent } from '@well-known-components/logger'
-import { createTestMetricsComponent } from '@well-known-components/metrics'
-import {
-  createLocalFetchCompoment as createLocalFetchComponent,
-  createRunner
-} from '@well-known-components/test-helpers'
+import { createFetchComponent } from '@dcl/fetch-component'
 import { createServerComponent, createStatusCheckComponent } from '@dcl/http-server'
+import { createTestMetricsComponent } from '@dcl/metrics'
 import { createPgComponent } from '@dcl/pg-component'
 import { createSchemaValidatorComponent } from '@dcl/schema-validator-component'
+import { createLocalFetchComponent, createRunner } from '@dcl/test-helpers'
 import { createCmsDatabaseComponent } from '../src/adapters/cms-db'
 import { createContentfulComponent } from '../src/adapters/contentful'
 import { metricDeclarations } from '../src/metrics'

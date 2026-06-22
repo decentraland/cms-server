@@ -1,18 +1,18 @@
 import { resolve } from 'path'
 import { createDotEnvConfigComponent } from '@well-known-components/env-config-provider'
-import { Verbosity, instrumentHttpServerWithRequestLogger } from '@well-known-components/http-requests-logger-component'
-import { createHttpTracerComponent } from '@well-known-components/http-tracer-component'
 import { createLogComponent } from '@well-known-components/logger'
-import { createMetricsComponent } from '@well-known-components/metrics'
-import { createTracerComponent } from '@well-known-components/tracer-component'
+import { Verbosity, instrumentHttpServerWithRequestLogger } from '@dcl/http-requests-logger-component'
 import {
   createServerComponent,
   createStatusCheckComponent,
   instrumentHttpServerWithPromClientRegistry
 } from '@dcl/http-server'
+import { createHttpTracerComponent } from '@dcl/http-tracer-component'
+import { createMetricsComponent } from '@dcl/metrics'
 import { createPgComponent } from '@dcl/pg-component'
 import { createSchemaValidatorComponent } from '@dcl/schema-validator-component'
 import { createTracedFetcherComponent } from '@dcl/traced-fetch-component'
+import { createTracerComponent } from '@dcl/tracer-component'
 import { createCmsDatabaseComponent } from './adapters/cms-db'
 import { createContentfulComponent } from './adapters/contentful'
 import { metricDeclarations } from './metrics'
