@@ -251,7 +251,10 @@ async function discoverEntryIds(): Promise<{ entryIds: string[]; assetIds: strin
   // Fetch a few blog posts to extract real entry and asset IDs for testing
   const url = `${LAMBDA}${BASE}/blog/posts?limit=3`
   const res = await fetch(url)
-  if (!res.ok) return { entryIds: [], assetIds: [] }
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => undefined)
+    return { entryIds: [], assetIds: [] }
+  }
 
   const data = (await res.json()) as { items?: Array<Record<string, Record<string, unknown>>> }
   const entryIds: string[] = []
@@ -314,6 +317,8 @@ async function main() {
         description: `Posts by category=${catSlug}`
       })
     }
+  } else {
+    await catRes.body?.cancel().catch(() => undefined)
   }
 
   const authRes = await fetch(`${LAMBDA}${BASE}/blog/authors?limit=1`)
@@ -330,6 +335,8 @@ async function main() {
         description: `Posts by author=${authSlug}`
       })
     }
+  } else {
+    await authRes.body?.cancel().catch(() => undefined)
   }
 
   // Run comparisons

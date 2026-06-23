@@ -120,6 +120,7 @@ export async function createContentfulComponent(
       })
 
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined)
         throw new Error(`Contentful API returned ${response.status} for ${contentType} (skip=${skip})`)
       }
 
