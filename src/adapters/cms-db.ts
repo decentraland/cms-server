@@ -623,9 +623,14 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
   }
 
   /**
-   * Resolves a localized `slug` jsonb to a single string, matching `localizeFieldValue`: the
-   * requested locale, then `en-US`, then a legacy scalar value stored before slugs were localized.
-   * Without this the projection would silently drop URLs that the listing endpoints still serve.
+   * Resolves a localized `slug` jsonb to a single string, mirroring `localizeFieldValue` in
+   * `logic/localization`: the requested locale, then `en-US`, then a legacy scalar value stored
+   * before slugs were localized. Without it the projection would silently drop URLs that the
+   * listing endpoints still serve.
+   *
+   * Deliberate duplication: the TS localizer needs the entry in memory, which is the cost this
+   * projection exists to avoid. The two implementations have to stay in step, and the missing
+   * translation case in `test/integration/blog-urls.spec.ts` is what catches them drifting.
    */
   function localizedSlug(column: string, localeParam: string): string {
     return `COALESCE(

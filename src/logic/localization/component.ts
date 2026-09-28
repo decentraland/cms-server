@@ -29,6 +29,10 @@ export function isLocalizedFieldValue(value: unknown): value is Record<Locale, u
  * Extracts the value for a specific locale from a field value.
  * If the field is in localized format, returns the requested locale with `en-US` fallback.
  * If the field is not localized (legacy/plain value), returns it as-is.
+ *
+ * This fallback is mirrored in SQL by `localizedSlug` in `adapters/cms-db.ts`, which resolves slugs
+ * without reading the entry, so the URL index does not have to ship every body to pick a string.
+ * The two must agree: changing the order here means changing it there.
  * @param value - The field value (localized or plain).
  * @param locale - The target locale to extract.
  */
