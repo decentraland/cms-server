@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 import type { IHttpServerComponent } from '@dcl/core-commons'
-import { listBlog } from '../../logic/blog'
+import { listBlog, listBlogUrls } from '../../logic/blog'
 import { parseLocale } from '../../logic/localization'
 import { BadRequestError, NotFoundError } from '../../types/errors'
 import { mapErrorToResponse } from '../error-mapper'
@@ -79,6 +79,49 @@ export async function blogHandler(
       status: 200,
       body: result,
       headers: { 'Cache-Control': 'public, max-age=300' }
+    }
+  } catch (err) {
+    return mapErrorToResponse(requestId, err, logger)
+  }
+}
+
+/**
+ * Returns every blog URL with its last-modified and nothing else.
+ *
+ * Separate from `blogHandler` because the listing endpoints return whole entries: a consumer that
+ * builds links (a sitemap generator, a link index) would otherwise page through 12 MB of rich text
+ * to collect a few hundred slugs. Cached longer than the listings for the same reason: the set of
+ * URLs moves when a post is published, not when its body is edited.
+ */
+export async function blogUrlsHandler(
+  context: Pick<
+    HandlerContextWithPath<'cmsDb' | 'cmsConfig' | 'logs', '/spaces/:space/environments/:environment/blog/urls'>,
+    'url' | 'params' | 'components'
+  >
+): Promise<IHttpServerComponent.IResponse> {
+  const { url, params, components } = context
+  const { cmsConfig, logs } = components
+  const logger = logs.getLogger('blog-controller')
+  const requestId = randomUUID()
+
+  try {
+    const { space, environment } = params
+
+    if (space !== cmsConfig.contentfulSpaceId || environment !== cmsConfig.contentfulEnvironmentId) {
+      throw new NotFoundError()
+    }
+
+    const locale = parseLocale(url.searchParams.get('locale'))
+    if (!locale) {
+      throw new BadRequestError(`Unknown locale: ${url.searchParams.get('locale')}`)
+    }
+
+    const result = await listBlogUrls(components, { space, environment, locale })
+
+    return {
+      status: 200,
+      body: result,
+      headers: { 'Cache-Control': 'public, max-age=900' }
     }
   } catch (err) {
     return mapErrorToResponse(requestId, err, logger)

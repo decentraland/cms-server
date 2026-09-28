@@ -196,6 +196,7 @@ export interface ICmsDatabaseComponent {
   listBlogPosts(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult>
   listBlogCategories(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult>
   listBlogAuthors(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult>
+  listBlogUrls(space: string, environment: string, locale: string): Promise<BlogUrlRows>
   getLastSync(space: string, environment: string): Promise<Date | null>
   setLastSync(space: string, environment: string, timestamp: string, client?: DatabaseClient): Promise<void>
   bulkUpsertBlogContent(
@@ -212,6 +213,19 @@ export interface ICmsDatabaseComponent {
  * Consumes the pg component and provides CMS-specific query methods.
  * @param components - The pg and logs components.
  */
+/** Projection rows for the URL index: no `content`, so a full archive stays a few tens of KB. */
+export interface BlogUrlRow {
+  slug: string
+  category_slug?: string | null
+  updated_at: string | null
+}
+
+export interface BlogUrlRows {
+  posts: BlogUrlRow[]
+  categories: BlogUrlRow[]
+  authors: BlogUrlRow[]
+}
+
 export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' | 'logs'>): ICmsDatabaseComponent {
   const { pg } = components
 
@@ -608,6 +622,57 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     return listBlogRef('cms_blog_authors', 'list_authors', space, environment, opts)
   }
 
+  /**
+   * Every blog URL with its real last-modified, and nothing else.
+   *
+   * Exists because the listing endpoints return the whole entry: one page of 100 posts is 2.5 MB
+   * because each row carries its rich-text body, and a consumer that only needs slugs (a sitemap,
+   * a link index) would move 12 MB to extract a few hundred strings. This projects in SQL instead.
+   *
+   * `updated_at` comes from the entry's own `sys.updatedAt`, not from the row's, so it reflects
+   * when the content changed rather than when this cache last wrote it.
+   */
+  async function listBlogUrls(space: string, environment: string, locale: string): Promise<BlogUrlRows> {
+    const params = [space, environment, locale]
+
+    const [posts, categories, authors] = await Promise.all([
+      pool().query({
+        text: `SELECT bp.slug ->> $3 AS slug,
+                      cat.slug ->> $3 AS category_slug,
+                      bp.content -> 'sys' ->> 'updatedAt' AS updated_at
+               FROM cms_blog_posts bp
+               LEFT JOIN cms_blog_categories cat
+                 ON cat.space = bp.space AND cat.environment = bp.environment AND cat.id = bp.category_id
+               WHERE bp.space = $1 AND bp.environment = $2 AND bp.slug ? $3
+               ORDER BY bp.published_date_sort DESC NULLS LAST`,
+        values: params,
+        name: 'list_blog_urls_posts'
+      }),
+      pool().query({
+        text: `SELECT slug ->> $3 AS slug, content -> 'sys' ->> 'updatedAt' AS updated_at
+               FROM cms_blog_categories
+               WHERE space = $1 AND environment = $2 AND slug ? $3
+               ORDER BY slug ->> $3`,
+        values: params,
+        name: 'list_blog_urls_categories'
+      }),
+      pool().query({
+        text: `SELECT slug ->> $3 AS slug, content -> 'sys' ->> 'updatedAt' AS updated_at
+               FROM cms_blog_authors
+               WHERE space = $1 AND environment = $2 AND slug ? $3
+               ORDER BY slug ->> $3`,
+        values: params,
+        name: 'list_blog_urls_authors'
+      })
+    ])
+
+    return {
+      posts: posts.rows as BlogUrlRow[],
+      categories: categories.rows as BlogUrlRow[],
+      authors: authors.rows as BlogUrlRow[]
+    }
+  }
+
   async function getLastSync(space: string, environment: string): Promise<Date | null> {
     const result = await pg.query(
       SQL`SELECT value FROM cms_sync_metadata WHERE space = ${space} AND environment = ${environment} AND key = 'last-sync'`
@@ -687,6 +752,7 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     listBlogPosts,
     listBlogCategories,
     listBlogAuthors,
+    listBlogUrls,
     getLastSync,
     setLastSync,
     bulkUpsertBlogContent

@@ -1,5 +1,5 @@
 import { localizeFields } from '../localization'
-import type { BlogListItem, BlogListParams, BlogListResult } from './types'
+import type { BlogListItem, BlogListParams, BlogListResult, BlogUrl, BlogUrlsResult } from './types'
 import type { ListResult } from '../../adapters/cms-db'
 import type { AppComponents } from '../../types'
 
@@ -40,4 +40,46 @@ export async function listBlog(
   logger.log('Blog listing loaded', { type, count: String(items.length), total: String(result.total) })
 
   return { items, total: result.total, skip, limit }
+}
+
+/** Drops rows whose slug is missing for the requested locale: a URL cannot be built without one. */
+function toBlogUrls(
+  rows: Array<{ slug: string; category_slug?: string | null; updated_at: string | null }>
+): BlogUrl[] {
+  return rows
+    .filter((row) => typeof row.slug === 'string' && row.slug.length > 0)
+    .map((row) => ({
+      slug: row.slug,
+      ...(row.category_slug ? { categorySlug: row.category_slug } : {}),
+      updatedAt: row.updated_at
+    }))
+}
+
+/**
+ * Every blog URL with its last-modified, for consumers that build links rather than render posts.
+ * @param components - Database and logs components.
+ * @param params - Already-validated space, environment and locale.
+ */
+export async function listBlogUrls(
+  components: Pick<AppComponents, 'cmsDb' | 'logs'>,
+  params: { space: string; environment: string; locale: string }
+): Promise<BlogUrlsResult> {
+  const { cmsDb, logs } = components
+  const logger = logs.getLogger('blog')
+  const { space, environment, locale } = params
+
+  const rows = await cmsDb.listBlogUrls(space, environment, locale)
+  const result = {
+    posts: toBlogUrls(rows.posts),
+    categories: toBlogUrls(rows.categories),
+    authors: toBlogUrls(rows.authors)
+  }
+
+  logger.log('Blog URL index loaded', {
+    posts: String(result.posts.length),
+    categories: String(result.categories.length),
+    authors: String(result.authors.length)
+  })
+
+  return result
 }

@@ -28,3 +28,18 @@ export interface BlogListResult {
   skip: number
   limit: number
 }
+
+/** One blog URL, stripped to what a sitemap or a link index needs. */
+export interface BlogUrl {
+  slug: string
+  /** Only posts carry one: it is the first path segment of the post URL. */
+  categorySlug?: string
+  /** Contentful's `sys.updatedAt` for the entry, so `lastmod` is a real value. */
+  updatedAt: string | null
+}
+
+export interface BlogUrlsResult {
+  posts: BlogUrl[]
+  categories: BlogUrl[]
+  authors: BlogUrl[]
+}
