@@ -10,9 +10,9 @@ import {
   createBlogPostEntry
 } from '../helpers'
 
-const BASE = `/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/urls`
+const base = (type: string) => `/spaces/${TEST_SPACE}/environments/${TEST_ENVIRONMENT}/blog/${type}`
 
-test('when reading the blog URL index', ({ components }) => {
+test('when listing blog content with view=urls', ({ components }) => {
   function postWebhook(entry: Record<string, unknown>) {
     return components.localFetch.fetch('/webhook', {
       method: 'POST',
@@ -34,39 +34,51 @@ test('when reading the blog URL index', ({ components }) => {
     await postWebhook(createBlogPostEntry({ id: 'post-1', slug: 'first-post' }))
   })
 
-  describe('and the requested locale is the default one', () => {
-    it('should return every slug with its category and its CMS last-modified', async () => {
-      const response = await components.localFetch.fetch(`${BASE}?locale=en-US`)
+  describe('and the type is posts', () => {
+    it('should return the slug, its category and the CMS last-modified in the listing envelope', async () => {
+      const response = await components.localFetch.fetch(`${base('posts')}?view=urls&locale=en-US`)
       const body = await response.json()
 
       expect(response.status).toBe(200)
-      expect(body.posts).toHaveLength(1)
-      expect(body.posts[0].slug).toBe('first-post')
-      expect(body.posts[0].categorySlug).toBe('technology')
-      expect(typeof body.posts[0].updatedAt).toBe('string')
-      expect(body.categories.map((c: { slug: string }) => c.slug)).toContain('technology')
-      expect(body.authors).toHaveLength(1)
+      expect(body).toMatchObject({ total: 1, skip: 0 })
+      expect(body.items).toHaveLength(1)
+      expect(body.items[0].slug).toBe('first-post')
+      expect(body.items[0].categorySlug).toBe('technology')
+      expect(typeof body.items[0].updatedAt).toBe('string')
     })
 
-    // The whole point of the endpoint: no rich text on the wire.
+    // The whole point of the view: no rich text on the wire.
     it('should not carry the post body', async () => {
-      const response = await components.localFetch.fetch(`${BASE}?locale=en-US`)
+      const response = await components.localFetch.fetch(`${base('posts')}?view=urls&locale=en-US`)
 
       expect(JSON.stringify(await response.json())).not.toContain('nodeType')
     })
   })
 
-  describe('and the requested locale has its own slug', () => {
-    it('should return that locale slug', async () => {
-      const response = await components.localFetch.fetch(`${BASE}?locale=es`)
-      const body = await response.json()
+  describe('and the type is categories or authors', () => {
+    it('should return their slugs without a category segment', async () => {
+      const categories = await (
+        await components.localFetch.fetch(`${base('categories')}?view=urls&locale=en-US`)
+      ).json()
+      const authors = await (await components.localFetch.fetch(`${base('authors')}?view=urls&locale=en-US`)).json()
 
-      expect(body.categories.map((c: { slug: string }) => c.slug)).toContain('tecnologia')
+      expect(categories.items.map((i: { slug: string }) => i.slug)).toContain('technology')
+      expect(categories.items[0]).not.toHaveProperty('categorySlug')
+      expect(authors.items).toHaveLength(1)
     })
   })
 
-  // The listing endpoints fall back to en-US for a missing translation, so this one must too or it
-  // would omit URLs the site still serves.
+  describe('and the requested locale has its own slug', () => {
+    it('should return that locale slug', async () => {
+      const response = await components.localFetch.fetch(`${base('categories')}?view=urls&locale=es`)
+      const body = await response.json()
+
+      expect(body.items.map((i: { slug: string }) => i.slug)).toContain('tecnologia')
+    })
+  })
+
+  // The listings fall back to en-US for a missing translation, so this view must too or it would
+  // omit URLs the site still serves.
   describe('and an entry has no slug for the requested locale', () => {
     beforeEach(async () => {
       const category = createBlogCategoryEntry({ id: 'cat-2' })
@@ -76,10 +88,10 @@ test('when reading the blog URL index', ({ components }) => {
     })
 
     it('should fall back to the default locale rather than dropping the URL', async () => {
-      const response = await components.localFetch.fetch(`${BASE}?locale=zh`)
+      const response = await components.localFetch.fetch(`${base('categories')}?view=urls&locale=zh`)
       const body = await response.json()
 
-      expect(body.categories.map((c: { slug: string }) => c.slug)).toContain('english-only')
+      expect(body.items.map((i: { slug: string }) => i.slug)).toContain('english-only')
     })
   })
 
@@ -90,40 +102,38 @@ test('when reading the blog URL index', ({ components }) => {
     })
 
     it('should leave it out instead of emitting an unroutable URL', async () => {
-      const response = await components.localFetch.fetch(`${BASE}?locale=en-US`)
+      const response = await components.localFetch.fetch(`${base('posts')}?view=urls&locale=en-US`)
       const body = await response.json()
 
-      expect(body.posts.map((p: { slug: string }) => p.slug)).not.toContain('orphan-post')
+      expect(body.items.map((i: { slug: string }) => i.slug)).not.toContain('orphan-post')
     })
   })
 
-  describe('and the locale is unknown', () => {
+  describe('and the view is unknown', () => {
     it('should reject the request', async () => {
-      const response = await components.localFetch.fetch(`${BASE}?locale=klingon`)
+      const response = await components.localFetch.fetch(`${base('posts')}?view=nope&locale=en-US`)
 
       expect(response.status).toBe(400)
     })
   })
 
-  // Registered before `/blog/:type`, which would otherwise answer `Invalid blog type: urls`.
-  describe('and the listing route could shadow this one', () => {
-    it('should reach this handler rather than the listing handler', async () => {
-      const response = await components.localFetch.fetch(`${BASE}?locale=en-US`)
+  describe('and no view is given', () => {
+    it('should keep returning whole entries', async () => {
+      const response = await components.localFetch.fetch(`${base('posts')}?locale=en-US`)
       const body = await response.json()
 
-      expect(response.status).toBe(200)
-      expect(body).toHaveProperty('posts')
-      expect(body).not.toHaveProperty('items')
+      expect(body.items[0]).toHaveProperty('fields')
+      expect(body.items[0]).not.toHaveProperty('categorySlug')
     })
   })
 
-  describe('and the space does not match the configured one', () => {
-    it('should answer not found', async () => {
-      const response = await components.localFetch.fetch(
-        `/spaces/other-space/environments/${TEST_ENVIRONMENT}/blog/urls?locale=en-US`
-      )
+  describe('and a limit above the view cap is requested', () => {
+    it('should clamp it rather than reject', async () => {
+      const response = await components.localFetch.fetch(`${base('posts')}?view=urls&locale=en-US&limit=9999`)
+      const body = await response.json()
 
-      expect(response.status).toBe(404)
+      expect(response.status).toBe(200)
+      expect(body.limit).toBe(1000)
     })
   })
 })

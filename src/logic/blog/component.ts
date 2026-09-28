@@ -1,5 +1,5 @@
 import { localizeFields } from '../localization'
-import type { BlogListItem, BlogListParams, BlogListResult, BlogUrl, BlogUrlsResult } from './types'
+import type { BlogListItem, BlogListParams, BlogListResult, BlogUrl } from './types'
 import type { ListResult } from '../../adapters/cms-db'
 import type { AppComponents } from '../../types'
 
@@ -14,7 +14,11 @@ export async function listBlog(
 ): Promise<BlogListResult> {
   const { cmsDb, logs } = components
   const logger = logs.getLogger('blog')
-  const { space, environment, type, locale, slug, category, author, q, limit, skip } = params
+  const { space, environment, type, view, locale, slug, category, author, q, limit, skip } = params
+
+  if (view === 'urls') {
+    return listUrlView(components, { space, environment, type, locale, limit, skip })
+  }
 
   const listOpts = { locale, slug, category, author, q, limit, skip }
 
@@ -42,50 +46,45 @@ export async function listBlog(
   return { items, total: result.total, skip, limit }
 }
 
-/** Drops rows whose slug is missing for the requested locale: a URL cannot be built without one. */
-function toBlogUrls(
-  rows: Array<{ slug: string; category_slug?: string | null; updated_at: string | null }>
-): BlogUrl[] {
-  return rows
-    .filter((row) => typeof row.slug === 'string' && row.slug.length > 0)
-    .map((row) => ({
-      slug: row.slug,
-      ...(row.category_slug ? { categorySlug: row.category_slug } : {}),
-      updatedAt: row.updated_at
-    }))
-}
-
 /**
- * Every blog URL with its last-modified, for consumers that build links rather than render posts.
- * @param components - Database and logs components.
- * @param params - Already-validated space, environment and locale.
+ * Drops rows a consumer could not turn into a URL: no slug for any locale, and for posts no
+ * category, since `/blog/:categorySlug/:postSlug` has no address without one. Dropping rather than
+ * emitting keeps a consumer from building `/blog/undefined/...`; the count is logged so the
+ * anomaly stays visible.
  */
-export async function listBlogUrls(
+async function listUrlView(
   components: Pick<AppComponents, 'cmsDb' | 'logs'>,
-  params: { space: string; environment: string; locale: string }
-): Promise<BlogUrlsResult> {
-  const { cmsDb, logs } = components
-  const logger = logs.getLogger('blog')
-  const { space, environment, locale } = params
-
-  const rows = await cmsDb.listBlogUrls(space, environment, locale)
-  // A post URL is `/blog/:categorySlug/:postSlug`, so a post whose category does not resolve has no
-  // address. Dropped rather than emitted, so a consumer cannot build `/blog/undefined/...`, and
-  // counted so the anomaly is visible instead of silent.
-  const postRows = toBlogUrls(rows.posts)
-  const posts = postRows.filter((post) => Boolean(post.categorySlug))
-  const result = {
-    posts,
-    categories: toBlogUrls(rows.categories),
-    authors: toBlogUrls(rows.authors)
+  params: {
+    space: string
+    environment: string
+    type: BlogListParams['type']
+    locale: string
+    limit: number
+    skip: number
   }
+): Promise<BlogListResult> {
+  const { cmsDb, logs } = components
+  const { space, environment, type, locale, limit, skip } = params
 
-  logger.log('Blog URL index loaded', {
-    posts: String(result.posts.length),
-    postsWithoutCategory: String(postRows.length - posts.length),
-    categories: String(result.categories.length),
-    authors: String(result.authors.length)
+  const { rows, total } = await cmsDb.listBlogUrlProjection(space, environment, type, { locale, limit, skip })
+
+  const items = rows
+    .filter((row) => typeof row.slug === 'string' && row.slug.length > 0)
+    .filter((row) => type !== 'posts' || Boolean(row.category_slug))
+    .map(
+      (row): BlogUrl => ({
+        slug: row.slug,
+        ...(row.category_slug ? { categorySlug: row.category_slug } : {}),
+        updatedAt: row.updated_at
+      })
+    )
+
+  logs.getLogger('blog').log('Blog URL view loaded', {
+    type,
+    returned: String(items.length),
+    dropped: String(rows.length - items.length),
+    total: String(total)
   })
 
-  return result
+  return { items: items as unknown as BlogListItem[], total, skip, limit }
 }

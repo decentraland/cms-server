@@ -6,6 +6,8 @@ export interface BlogListParams {
   space: string
   environment: string
   type: 'posts' | 'categories' | 'authors'
+  /** `urls` swaps the entry payload for slug + lastmod. Unset returns the full entries. */
+  view: 'urls' | null
   locale: Locale
   slug: string | null
   category: string | null
@@ -29,17 +31,11 @@ export interface BlogListResult {
   limit: number
 }
 
-/** One blog URL, stripped to what a sitemap or a link index needs. */
+/** One item of the `view=urls` projection, stripped to what a link builder needs. */
 export interface BlogUrl {
   slug: string
-  /** Only posts carry one: it is the first path segment of the post URL. */
+  /** Posts only: the first path segment of `/blog/:categorySlug/:postSlug`. */
   categorySlug?: string
-  /** Contentful's `sys.updatedAt` for the entry, so `lastmod` is a real value. */
+  /** The entry's `sys.updatedAt`, so a consumer gets a real `lastmod` rather than an invented one. */
   updatedAt: string | null
-}
-
-export interface BlogUrlsResult {
-  posts: BlogUrl[]
-  categories: BlogUrl[]
-  authors: BlogUrl[]
 }

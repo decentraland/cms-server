@@ -60,6 +60,12 @@ paths:
         Returns a paginated list of blog posts, categories, or authors.
         Supports filtering by category slug, author slug, and post slug.
         Results are localized to the requested locale.
+
+        `view=urls` swaps the entry payload for a projection carrying only what a link builder
+        needs (slug, the post's category slug, and the entry's `sys.updatedAt`). A listing page of
+        100 posts is about 2.5 MB because every row carries its rich-text body; a projected page is
+        a few KB, so the whole archive fits in one request per type. Its limit caps at 1000 rather
+        than 100 for the same reason.
       parameters:
         - name: space
           in: path
@@ -80,6 +86,13 @@ paths:
             type: string
             enum: [posts, categories, authors]
           description: Blog content type to list
+        - name: view
+          in: query
+          schema:
+            type: string
+            enum: [urls]
+          description: >
+            Omit for whole entries. `urls` returns the slug projection instead.
         - name: locale
           in: query
           schema:

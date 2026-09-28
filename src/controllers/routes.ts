@@ -1,5 +1,5 @@
 import { Router } from '@dcl/http-server'
-import { blogHandler, blogUrlsHandler } from './handlers/blog-handler'
+import { blogHandler } from './handlers/blog-handler'
 import { entryHandler, localesHandler } from './handlers/entry-handler'
 import { pingHandler } from './handlers/ping-handler'
 import { bulkSyncHandler, singleEntrySyncHandler } from './handlers/sync-handler'
@@ -18,9 +18,6 @@ export async function setupRouter(_: GlobalContext): Promise<Router<GlobalContex
 
   // Locales
   router.get('/spaces/:space/environments/:environment/locales', localesHandler)
-
-  // Blog URL index. Registered before `/blog/:type` or that route claims `urls` and rejects it.
-  router.get('/spaces/:space/environments/:environment/blog/urls', blogUrlsHandler)
 
   // Blog listing (posts, categories, authors)
   router.get('/spaces/:space/environments/:environment/blog/:type', blogHandler)

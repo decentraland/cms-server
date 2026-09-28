@@ -196,7 +196,12 @@ export interface ICmsDatabaseComponent {
   listBlogPosts(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult>
   listBlogCategories(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult>
   listBlogAuthors(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult>
-  listBlogUrls(space: string, environment: string, locale: string): Promise<BlogUrlRows>
+  listBlogUrlProjection(
+    space: string,
+    environment: string,
+    type: BlogListType,
+    opts: Pick<ListBlogOptions, 'locale' | 'limit' | 'skip'>
+  ): Promise<BlogUrlProjectionResult>
   getLastSync(space: string, environment: string): Promise<Date | null>
   setLastSync(space: string, environment: string, timestamp: string, client?: DatabaseClient): Promise<void>
   bulkUpsertBlogContent(
@@ -213,18 +218,19 @@ export interface ICmsDatabaseComponent {
  * Consumes the pg component and provides CMS-specific query methods.
  * @param components - The pg and logs components.
  */
-/** Projection rows for the URL index: no `content`, so a full archive stays a few tens of KB. */
+/** One row of the `view=urls` projection: no `content`, so the whole archive stays a few tens of KB. */
 export interface BlogUrlRow {
   slug: string
   category_slug?: string | null
   updated_at: string | null
 }
 
-export interface BlogUrlRows {
-  posts: BlogUrlRow[]
-  categories: BlogUrlRow[]
-  authors: BlogUrlRow[]
+export interface BlogUrlProjectionResult {
+  rows: BlogUrlRow[]
+  total: number
 }
+
+export type BlogListType = 'posts' | 'categories' | 'authors'
 
 export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' | 'logs'>): ICmsDatabaseComponent {
   const { pg } = components
@@ -629,8 +635,8 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
    * listing endpoints still serve.
    *
    * Deliberate duplication: the TS localizer needs the entry in memory, which is the cost this
-   * projection exists to avoid. The two implementations have to stay in step, and the missing
-   * translation case in `test/integration/blog-urls.spec.ts` is what catches them drifting.
+   * projection exists to avoid. The two have to stay in step, and the missing-translation case in
+   * `test/integration/blog-urls.spec.ts` is what catches them drifting.
    */
   function localizedSlug(column: string, localeParam: string): string {
     return `COALESCE(
@@ -640,59 +646,58 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     )`
   }
 
-  /**
-   * Every blog URL with its real last-modified, and nothing else.
-   *
-   * Exists because the listing endpoints return the whole entry: one page of 100 posts is 2.5 MB
-   * because each row carries its rich-text body, and a consumer that only needs slugs (a sitemap,
-   * a link index) would move 12 MB to extract a few hundred strings. This projects in SQL instead.
-   *
-   * `updated_at` comes from the entry's own `sys.updatedAt`, not from the row's, so it reflects
-   * when the content changed rather than when this cache last wrote it.
-   *
-   * Unpaginated on purpose: the whole point is one request, and the archive is a few hundred rows.
-   * The slug predicate cannot use `idx_cms_blog_posts_slug` (GIN `jsonb_path_ops` does not index
-   * the `?` operator), so it applies as a filter over the date index. Fine at this size; revisit
-   * if the archive grows an order of magnitude.
-   */
-  async function listBlogUrls(space: string, environment: string, locale: string): Promise<BlogUrlRows> {
-    const params = [space, environment, locale]
+  const URL_PROJECTION_TABLES: Record<BlogListType, string> = {
+    posts: 'cms_blog_posts',
+    categories: 'cms_blog_categories',
+    authors: 'cms_blog_authors'
+  }
 
-    const [posts, categories, authors] = await Promise.all([
+  /**
+   * The `view=urls` projection: slug, the post's category slug, and the entry's own
+   * `sys.updatedAt`. Never selects `content`, which is what makes a page a few KB instead of the
+   * 2.5 MB a listing page costs once every row carries its rich-text body.
+   */
+  async function listBlogUrlProjection(
+    space: string,
+    environment: string,
+    type: BlogListType,
+    opts: Pick<ListBlogOptions, 'locale' | 'limit' | 'skip'>
+  ): Promise<BlogUrlProjectionResult> {
+    const { locale, limit, skip } = opts
+    const table = URL_PROJECTION_TABLES[type]
+    const isPosts = type === 'posts'
+
+    // Posts carry their category slug through a join; the other two have no second URL segment.
+    const selectCategory = isPosts ? `${localizedSlug('cat.slug', '$3')} AS category_slug,` : ''
+    const joinCategory = isPosts
+      ? `LEFT JOIN cms_blog_categories cat
+           ON cat.space = t.space AND cat.environment = t.environment AND cat.id = t.category_id`
+      : ''
+    const order = isPosts ? 't.published_date_sort DESC NULLS LAST' : '1'
+
+    const [countResult, rowsResult] = await Promise.all([
       pool().query({
-        text: `SELECT ${localizedSlug('bp.slug', '$3')} AS slug,
-                      ${localizedSlug('cat.slug', '$3')} AS category_slug,
-                      bp.content -> 'sys' ->> 'updatedAt' AS updated_at
-               FROM cms_blog_posts bp
-               LEFT JOIN cms_blog_categories cat
-                 ON cat.space = bp.space AND cat.environment = bp.environment AND cat.id = bp.category_id
-               WHERE bp.space = $1 AND bp.environment = $2
-               ORDER BY bp.published_date_sort DESC NULLS LAST`,
-        values: params,
-        name: 'list_blog_urls_posts'
+        text: `SELECT count(*) AS total FROM ${table} t WHERE t.space = $1 AND t.environment = $2`,
+        values: [space, environment],
+        name: `list_blog_urls_count_${type}`
       }),
       pool().query({
-        text: `SELECT ${localizedSlug('slug', '$3')} AS slug, content -> 'sys' ->> 'updatedAt' AS updated_at
-               FROM cms_blog_categories
-               WHERE space = $1 AND environment = $2
-               ORDER BY 1`,
-        values: params,
-        name: 'list_blog_urls_categories'
-      }),
-      pool().query({
-        text: `SELECT ${localizedSlug('slug', '$3')} AS slug, content -> 'sys' ->> 'updatedAt' AS updated_at
-               FROM cms_blog_authors
-               WHERE space = $1 AND environment = $2
-               ORDER BY 1`,
-        values: params,
-        name: 'list_blog_urls_authors'
+        text: `SELECT ${localizedSlug('t.slug', '$3')} AS slug,
+                      ${selectCategory}
+                      t.content -> 'sys' ->> 'updatedAt' AS updated_at
+               FROM ${table} t
+               ${joinCategory}
+               WHERE t.space = $1 AND t.environment = $2
+               ORDER BY ${order}
+               OFFSET $4 LIMIT $5`,
+        values: [space, environment, locale, skip, limit],
+        name: `list_blog_urls_${type}`
       })
     ])
 
     return {
-      posts: posts.rows as BlogUrlRow[],
-      categories: categories.rows as BlogUrlRow[],
-      authors: authors.rows as BlogUrlRow[]
+      rows: rowsResult.rows as BlogUrlRow[],
+      total: parseInt(countResult.rows[0].total, 10)
     }
   }
 
@@ -775,7 +780,7 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     listBlogPosts,
     listBlogCategories,
     listBlogAuthors,
-    listBlogUrls,
+    listBlogUrlProjection,
     getLastSync,
     setLastSync,
     bulkUpsertBlogContent
