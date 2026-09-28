@@ -623,6 +623,19 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
   }
 
   /**
+   * Resolves a localized `slug` jsonb to a single string, matching `localizeFieldValue`: the
+   * requested locale, then `en-US`, then a legacy scalar value stored before slugs were localized.
+   * Without this the projection would silently drop URLs that the listing endpoints still serve.
+   */
+  function localizedSlug(column: string, localeParam: string): string {
+    return `COALESCE(
+      NULLIF(${column} ->> ${localeParam}, ''),
+      NULLIF(${column} ->> 'en-US', ''),
+      CASE WHEN jsonb_typeof(${column}) = 'string' THEN ${column} #>> '{}' END
+    )`
+  }
+
+  /**
    * Every blog URL with its real last-modified, and nothing else.
    *
    * Exists because the listing endpoints return the whole entry: one page of 100 posts is 2.5 MB
@@ -631,36 +644,41 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
    *
    * `updated_at` comes from the entry's own `sys.updatedAt`, not from the row's, so it reflects
    * when the content changed rather than when this cache last wrote it.
+   *
+   * Unpaginated on purpose: the whole point is one request, and the archive is a few hundred rows.
+   * The slug predicate cannot use `idx_cms_blog_posts_slug` (GIN `jsonb_path_ops` does not index
+   * the `?` operator), so it applies as a filter over the date index. Fine at this size; revisit
+   * if the archive grows an order of magnitude.
    */
   async function listBlogUrls(space: string, environment: string, locale: string): Promise<BlogUrlRows> {
     const params = [space, environment, locale]
 
     const [posts, categories, authors] = await Promise.all([
       pool().query({
-        text: `SELECT bp.slug ->> $3 AS slug,
-                      cat.slug ->> $3 AS category_slug,
+        text: `SELECT ${localizedSlug('bp.slug', '$3')} AS slug,
+                      ${localizedSlug('cat.slug', '$3')} AS category_slug,
                       bp.content -> 'sys' ->> 'updatedAt' AS updated_at
                FROM cms_blog_posts bp
                LEFT JOIN cms_blog_categories cat
                  ON cat.space = bp.space AND cat.environment = bp.environment AND cat.id = bp.category_id
-               WHERE bp.space = $1 AND bp.environment = $2 AND bp.slug ? $3
+               WHERE bp.space = $1 AND bp.environment = $2
                ORDER BY bp.published_date_sort DESC NULLS LAST`,
         values: params,
         name: 'list_blog_urls_posts'
       }),
       pool().query({
-        text: `SELECT slug ->> $3 AS slug, content -> 'sys' ->> 'updatedAt' AS updated_at
+        text: `SELECT ${localizedSlug('slug', '$3')} AS slug, content -> 'sys' ->> 'updatedAt' AS updated_at
                FROM cms_blog_categories
-               WHERE space = $1 AND environment = $2 AND slug ? $3
-               ORDER BY slug ->> $3`,
+               WHERE space = $1 AND environment = $2
+               ORDER BY 1`,
         values: params,
         name: 'list_blog_urls_categories'
       }),
       pool().query({
-        text: `SELECT slug ->> $3 AS slug, content -> 'sys' ->> 'updatedAt' AS updated_at
+        text: `SELECT ${localizedSlug('slug', '$3')} AS slug, content -> 'sys' ->> 'updatedAt' AS updated_at
                FROM cms_blog_authors
-               WHERE space = $1 AND environment = $2 AND slug ? $3
-               ORDER BY slug ->> $3`,
+               WHERE space = $1 AND environment = $2
+               ORDER BY 1`,
         values: params,
         name: 'list_blog_urls_authors'
       })

@@ -69,14 +69,20 @@ export async function listBlogUrls(
   const { space, environment, locale } = params
 
   const rows = await cmsDb.listBlogUrls(space, environment, locale)
+  // A post URL is `/blog/:categorySlug/:postSlug`, so a post whose category does not resolve has no
+  // address. Dropped rather than emitted, so a consumer cannot build `/blog/undefined/...`, and
+  // counted so the anomaly is visible instead of silent.
+  const postRows = toBlogUrls(rows.posts)
+  const posts = postRows.filter((post) => Boolean(post.categorySlug))
   const result = {
-    posts: toBlogUrls(rows.posts),
+    posts,
     categories: toBlogUrls(rows.categories),
     authors: toBlogUrls(rows.authors)
   }
 
   logger.log('Blog URL index loaded', {
     posts: String(result.posts.length),
+    postsWithoutCategory: String(postRows.length - posts.length),
     categories: String(result.categories.length),
     authors: String(result.authors.length)
   })

@@ -29,17 +29,20 @@ describe('when listing blog URLs', () => {
     })
   })
 
+  // `/blog/:categorySlug/:postSlug` has no address without a category, so the row is not a URL.
   describe('and a post has no category', () => {
-    it('should omit the key rather than emit an empty segment', async () => {
+    it('should drop it rather than emit an unroutable URL', async () => {
       const { components } = componentsWith({
         ...emptyRows,
-        posts: [{ slug: 'orphan', category_slug: null, updated_at: null }]
+        posts: [
+          { slug: 'orphan', category_slug: null, updated_at: null },
+          { slug: 'kept', category_slug: 'announcements', updated_at: null }
+        ]
       })
 
       const result = await listBlogUrls(components, { space: 's', environment: 'master', locale: 'en-US' })
 
-      expect(result.posts).toEqual([{ slug: 'orphan', updatedAt: null }])
-      expect(result.posts[0]).not.toHaveProperty('categorySlug')
+      expect(result.posts.map((post) => post.slug)).toEqual(['kept'])
     })
   })
 

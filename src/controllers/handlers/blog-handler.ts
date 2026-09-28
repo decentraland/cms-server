@@ -90,8 +90,7 @@ export async function blogHandler(
  *
  * Separate from `blogHandler` because the listing endpoints return whole entries: a consumer that
  * builds links (a sitemap generator, a link index) would otherwise page through 12 MB of rich text
- * to collect a few hundred slugs. Cached longer than the listings for the same reason: the set of
- * URLs moves when a post is published, not when its body is edited.
+ * to collect a few hundred slugs.
  */
 export async function blogUrlsHandler(
   context: Pick<
@@ -121,7 +120,9 @@ export async function blogUrlsHandler(
     return {
       status: 200,
       body: result,
-      headers: { 'Cache-Control': 'public, max-age=900' }
+      // Same TTL as the listings: this exposes `sys.updatedAt`, which moves on a body edit, so its
+      // freshness is the listings' and not the slower cadence at which URLs appear and disappear.
+      headers: { 'Cache-Control': 'public, max-age=300' }
     }
   } catch (err) {
     return mapErrorToResponse(requestId, err, logger)
