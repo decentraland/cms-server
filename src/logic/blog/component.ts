@@ -1,5 +1,12 @@
 import { localizeFields } from '../localization'
-import type { BlogListItem, BlogListParams, BlogListResult, BlogUrl } from './types'
+import type {
+  BlogListItem,
+  BlogListParams,
+  BlogListResult,
+  BlogUrl,
+  BlogUrlListParams,
+  BlogUrlListResult
+} from './types'
 import type { ListResult } from '../../adapters/cms-db'
 import type { AppComponents } from '../../types'
 
@@ -14,11 +21,7 @@ export async function listBlog(
 ): Promise<BlogListResult> {
   const { cmsDb, logs } = components
   const logger = logs.getLogger('blog')
-  const { space, environment, type, view, locale, slug, category, author, q, limit, skip } = params
-
-  if (view === 'urls') {
-    return listUrlView(components, { space, environment, type, locale, limit, skip })
-  }
+  const { space, environment, type, locale, slug, category, author, q, limit, skip } = params
 
   const listOpts = { locale, slug, category, author, q, limit, skip }
 
@@ -47,44 +50,29 @@ export async function listBlog(
 }
 
 /**
- * Drops rows a consumer could not turn into a URL: no slug for any locale, and for posts no
- * category, since `/blog/:categorySlug/:postSlug` has no address without one. Dropping rather than
- * emitting keeps a consumer from building `/blog/undefined/...`; the count is logged so the
- * anomaly stays visible.
+ * Lists the `view=urls` projection: slug, category slug and `sys.updatedAt` per entry, with
+ * unroutable rows already excluded by the query so `total` counts only what is returned.
+ * @param components - Database and logs components.
+ * @param params - Already-validated projection parameters.
  */
-async function listUrlView(
+export async function listBlogUrls(
   components: Pick<AppComponents, 'cmsDb' | 'logs'>,
-  params: {
-    space: string
-    environment: string
-    type: BlogListParams['type']
-    locale: string
-    limit: number
-    skip: number
-  }
-): Promise<BlogListResult> {
+  params: BlogUrlListParams
+): Promise<BlogUrlListResult> {
   const { cmsDb, logs } = components
   const { space, environment, type, locale, limit, skip } = params
 
   const { rows, total } = await cmsDb.listBlogUrlProjection(space, environment, type, { locale, limit, skip })
 
-  const items = rows
-    .filter((row) => typeof row.slug === 'string' && row.slug.length > 0)
-    .filter((row) => type !== 'posts' || Boolean(row.category_slug))
-    .map(
-      (row): BlogUrl => ({
-        slug: row.slug,
-        ...(row.category_slug ? { categorySlug: row.category_slug } : {}),
-        updatedAt: row.updated_at
-      })
-    )
+  const items = rows.map(
+    (row): BlogUrl => ({
+      slug: row.slug,
+      ...(row.category_slug ? { categorySlug: row.category_slug } : {}),
+      updatedAt: row.updated_at
+    })
+  )
 
-  logs.getLogger('blog').log('Blog URL view loaded', {
-    type,
-    returned: String(items.length),
-    dropped: String(rows.length - items.length),
-    total: String(total)
-  })
+  logs.getLogger('blog').log('Blog URL view loaded', { type, count: String(items.length), total: String(total) })
 
-  return { items: items as unknown as BlogListItem[], total, skip, limit }
+  return { items, total, skip, limit }
 }

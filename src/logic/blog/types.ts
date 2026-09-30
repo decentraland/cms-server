@@ -6,8 +6,6 @@ export interface BlogListParams {
   space: string
   environment: string
   type: 'posts' | 'categories' | 'authors'
-  /** `urls` swaps the entry payload for slug + lastmod. Unset returns the full entries. */
-  view: 'urls' | null
   locale: Locale
   slug: string | null
   category: string | null
@@ -31,6 +29,9 @@ export interface BlogListResult {
   limit: number
 }
 
+/** Pre-validated params for the `view=urls` projection: the listing params minus the filters it does not honour. */
+export type BlogUrlListParams = Pick<BlogListParams, 'space' | 'environment' | 'type' | 'locale' | 'limit' | 'skip'>
+
 /** One item of the `view=urls` projection, stripped to what a link builder needs. */
 export interface BlogUrl {
   slug: string
@@ -38,4 +39,12 @@ export interface BlogUrl {
   categorySlug?: string
   /** The entry's `sys.updatedAt`, so a consumer gets a real `lastmod` rather than an invented one. */
   updatedAt: string | null
+}
+
+/** Same envelope as `BlogListResult`, so a paging consumer treats both views alike. */
+export interface BlogUrlListResult {
+  items: BlogUrl[]
+  total: number
+  skip: number
+  limit: number
 }

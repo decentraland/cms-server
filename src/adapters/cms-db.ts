@@ -89,6 +89,32 @@ const REF_RANK_WEIGHT = 0.5
 const FUZZY_RANK_WEIGHT = 0.3
 
 /**
+ * Resolves a localized `slug` jsonb to one string: the requested locale when it has a non-empty
+ * value, else `en-US`. This is `localizeFieldValue` in SQL, and `slugMatches` below is the same
+ * rule as a predicate; keep the three together. Both write paths store `fields.id` as the raw
+ * per-locale object, so there is no scalar case to handle.
+ */
+function localizedSlug(column: string, localeParam: string): string {
+  return `COALESCE(NULLIF(${column} ->> ${localeParam}, ''), NULLIF(${column} ->> 'en-US', ''))`
+}
+
+/**
+ * Matches a localized `slug` jsonb against a requested slug under the `localizedSlug` rule, so
+ * every slug a listing renders (or `view=urls` emits) can be looked back up in the same locale.
+ * Written as two containment checks rather than `localizedSlug(...) = $slug` so the GIN
+ * (`jsonb_path_ops`) index on `slug` still applies.
+ */
+function slugMatches(column: string, localeParam: string, slugParam: string): string {
+  return `(
+    ${column} @> jsonb_build_object(${localeParam}, ${slugParam})
+    OR (
+      NULLIF(${column} ->> ${localeParam}, '') IS NULL
+      AND ${column} @> jsonb_build_object('en-US', ${slugParam})
+    )
+  )`
+}
+
+/**
  * SQL fragments for the slug/category/author filter, shared between the plain and search
  * paths. The joined aliases are non-populating unless the corresponding filter param is
  * present. Both fragments assume the param layout:
@@ -99,16 +125,16 @@ const SLUG_FILTER_JOINS = `
   LEFT JOIN cms_blog_categories cat_slug
     ON $3::text IS NOT NULL
     AND cat_slug.space = $1 AND cat_slug.environment = $2
-    AND cat_slug.slug @> jsonb_build_object($4::text, $3::text)
+    AND ${slugMatches('cat_slug.slug', '$4::text', '$3::text')}
   LEFT JOIN cms_blog_authors auth_slug
     ON $5::text IS NOT NULL
     AND auth_slug.space = $1 AND auth_slug.environment = $2
-    AND auth_slug.slug @> jsonb_build_object($4::text, $5::text)`
+    AND ${slugMatches('auth_slug.slug', '$4::text', '$5::text')}`
 
 const SLUG_FILTER_WHERES = `
   AND ($3::text IS NULL OR bp.category_id = cat_slug.id)
   AND ($5::text IS NULL OR bp.author_id = auth_slug.id)
-  AND ($6::text IS NULL OR bp.slug @> jsonb_build_object($4::text, $6::text))`
+  AND ($6::text IS NULL OR ${slugMatches('bp.slug', '$4::text', '$6::text')})`
 
 /**
  * Sanitizes a user-supplied search string and converts it into a `to_tsquery`-compatible
@@ -213,15 +239,12 @@ export interface ICmsDatabaseComponent {
   ): Promise<void>
 }
 
-/**
- * Creates the CMS database adapter.
- * Consumes the pg component and provides CMS-specific query methods.
- * @param components - The pg and logs components.
- */
 /** One row of the `view=urls` projection: no `content`, so the whole archive stays a few tens of KB. */
 export interface BlogUrlRow {
+  /** Never null: the query filters out rows whose slug does not resolve for any locale. */
   slug: string
-  category_slug?: string | null
+  /** Posts only, and never null there for the same reason. */
+  category_slug?: string
   updated_at: string | null
 }
 
@@ -232,6 +255,11 @@ export interface BlogUrlProjectionResult {
 
 export type BlogListType = 'posts' | 'categories' | 'authors'
 
+/**
+ * Creates the CMS database adapter.
+ * Consumes the pg component and provides CMS-specific query methods.
+ * @param components - The pg and logs components.
+ */
 export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' | 'logs'>): ICmsDatabaseComponent {
   const { pg } = components
 
@@ -595,7 +623,7 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     const { locale, slug, limit, skip } = opts
 
     const whereClause = `space = $1 AND environment = $2
-    AND ($3::text IS NULL OR slug @> jsonb_build_object($4::text, $3::text))`
+    AND ($3::text IS NULL OR ${slugMatches('slug', '$4::text', '$3::text')})`
     const params = [space, environment, slug || null, locale]
 
     const [countResult, itemsResult] = await Promise.all([
@@ -628,24 +656,6 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     return listBlogRef('cms_blog_authors', 'list_authors', space, environment, opts)
   }
 
-  /**
-   * Resolves a localized `slug` jsonb to a single string, mirroring `localizeFieldValue` in
-   * `logic/localization`: the requested locale, then `en-US`, then a legacy scalar value stored
-   * before slugs were localized. Without it the projection would silently drop URLs that the
-   * listing endpoints still serve.
-   *
-   * Deliberate duplication: the TS localizer needs the entry in memory, which is the cost this
-   * projection exists to avoid. The two have to stay in step, and the missing-translation case in
-   * `test/integration/blog-urls.spec.ts` is what catches them drifting.
-   */
-  function localizedSlug(column: string, localeParam: string): string {
-    return `COALESCE(
-      NULLIF(${column} ->> ${localeParam}, ''),
-      NULLIF(${column} ->> 'en-US', ''),
-      CASE WHEN jsonb_typeof(${column}) = 'string' THEN ${column} #>> '{}' END
-    )`
-  }
-
   const URL_PROJECTION_TABLES: Record<BlogListType, string> = {
     posts: 'cms_blog_posts',
     categories: 'cms_blog_categories',
@@ -656,6 +666,10 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
    * The `view=urls` projection: slug, the post's category slug, and the entry's own
    * `sys.updatedAt`. Never selects `content`, which is what makes a page a few KB instead of the
    * 2.5 MB a listing page costs once every row carries its rich-text body.
+   *
+   * Rows a consumer could not turn into a URL are excluded in SQL rather than in the caller, so
+   * `total` equals the number of URLs the caller actually receives: no resolvable slug, and for
+   * posts no category, since `/blog/:categorySlug/:postSlug` has no address without one.
    */
   async function listBlogUrlProjection(
     space: string,
@@ -666,28 +680,33 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     const { locale, limit, skip } = opts
     const table = URL_PROJECTION_TABLES[type]
     const isPosts = type === 'posts'
+    const slugExpr = localizedSlug('t.slug', '$3')
 
     // Posts carry their category slug through a join; the other two have no second URL segment.
-    const selectCategory = isPosts ? `${localizedSlug('cat.slug', '$3')} AS category_slug,` : ''
-    const joinCategory = isPosts
-      ? `LEFT JOIN cms_blog_categories cat
+    const fromClause = isPosts
+      ? `${table} t
+         LEFT JOIN cms_blog_categories cat
            ON cat.space = t.space AND cat.environment = t.environment AND cat.id = t.category_id`
-      : ''
-    const order = isPosts ? 't.published_date_sort DESC NULLS LAST' : '1'
+      : `${table} t`
+    const whereClause = `t.space = $1 AND t.environment = $2
+      AND ${slugExpr} IS NOT NULL
+      ${isPosts ? `AND cat.id IS NOT NULL AND ${localizedSlug('cat.slug', '$3')} IS NOT NULL` : ''}`
+    // Neither published date nor slug is unique, so add the primary key or OFFSET paging can
+    // repeat and skip rows between pages.
+    const order = isPosts ? 't.published_date_sort DESC NULLS LAST, t.id' : '1, t.id'
 
     const [countResult, rowsResult] = await Promise.all([
       pool().query({
-        text: `SELECT count(*) AS total FROM ${table} t WHERE t.space = $1 AND t.environment = $2`,
-        values: [space, environment],
+        text: `SELECT count(*) AS total FROM ${fromClause} WHERE ${whereClause}`,
+        values: [space, environment, locale],
         name: `list_blog_urls_count_${type}`
       }),
       pool().query({
-        text: `SELECT ${localizedSlug('t.slug', '$3')} AS slug,
-                      ${selectCategory}
+        text: `SELECT ${slugExpr} AS slug,
+                      ${isPosts ? `${localizedSlug('cat.slug', '$3')} AS category_slug,` : ''}
                       t.content -> 'sys' ->> 'updatedAt' AS updated_at
-               FROM ${table} t
-               ${joinCategory}
-               WHERE t.space = $1 AND t.environment = $2
+               FROM ${fromClause}
+               WHERE ${whereClause}
                ORDER BY ${order}
                OFFSET $4 LIMIT $5`,
         values: [space, environment, locale, skip, limit],

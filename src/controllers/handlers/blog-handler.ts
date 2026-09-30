@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 import type { IHttpServerComponent } from '@dcl/core-commons'
-import { listBlog } from '../../logic/blog'
+import { listBlog, listBlogUrls } from '../../logic/blog'
 import { parseLocale } from '../../logic/localization'
 import { BadRequestError, NotFoundError } from '../../types/errors'
 import { mapErrorToResponse } from '../error-mapper'
@@ -69,6 +69,9 @@ export async function blogHandler(
     const author = url.searchParams.get('author')
     const q = parseSearchQuery(url.searchParams.get('q'))
     const view = parseView(url.searchParams.get('view'))
+    if (view === 'urls' && (slug || category || author || q)) {
+      throw new BadRequestError('view=urls does not accept the slug, category, author or q filters')
+    }
     const maxLimit = view === 'urls' ? MAX_URL_VIEW_LIMIT : MAX_ENTRY_LIMIT
     const defaultLimit = view === 'urls' ? MAX_URL_VIEW_LIMIT : 20
     const limitRaw = parseInt(url.searchParams.get('limit') || String(defaultLimit))
@@ -80,19 +83,22 @@ export async function blogHandler(
       throw new BadRequestError('Invalid pagination parameters')
     }
 
-    const result = await listBlog(components, {
-      space,
-      environment,
-      type: type as 'posts' | 'categories' | 'authors',
-      view,
-      locale,
-      slug,
-      category,
-      author,
-      q,
-      limit,
-      skip
-    })
+    const blogType = type as 'posts' | 'categories' | 'authors'
+    const result =
+      view === 'urls'
+        ? await listBlogUrls(components, { space, environment, type: blogType, locale, limit, skip })
+        : await listBlog(components, {
+            space,
+            environment,
+            type: blogType,
+            locale,
+            slug,
+            category,
+            author,
+            q,
+            limit,
+            skip
+          })
 
     return {
       status: 200,

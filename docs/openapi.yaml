@@ -92,7 +92,10 @@ paths:
             type: string
             enum: [urls]
           description: >
-            Omit for whole entries. `urls` returns the slug projection instead.
+            Omit for whole entries. `urls` returns the slug projection instead. It cannot be
+            combined with `slug`, `category`, `author` or `q`: the projection does not apply
+            them, so the request is rejected with a 400 rather than silently returning the
+            whole archive.
         - name: locale
           in: query
           schema:
@@ -143,12 +146,17 @@ paths:
                 properties:
                   items:
                     type: array
+                    description: Localized Contentful Entries, or `BlogUrl` items when `view=urls`
                     items:
-                      type: object
-                      description: Localized Contentful Entry
+                      oneOf:
+                        - type: object
+                          description: Localized Contentful Entry
+                        - $ref: '#/components/schemas/BlogUrl'
                   total:
                     type: integer
-                    description: Total matching items across all pages
+                    description: >
+                      Total matching items across all pages. With `view=urls` it counts only
+                      routable entries, i.e. the ones the projection can return.
                   skip:
                     type: integer
                   limit:
@@ -395,6 +403,23 @@ paths:
                     type: string
 
 components:
+  schemas:
+    BlogUrl:
+      type: object
+      description: One item of the `view=urls` projection, stripped to what a link builder needs
+      required: [slug, updatedAt]
+      properties:
+        slug:
+          type: string
+          description: Slug in the requested locale, falling back to `en-US` like the listings do
+        categorySlug:
+          type: string
+          description: Posts only. First path segment of `/blog/:categorySlug/:postSlug`
+        updatedAt:
+          type: [string, 'null']
+          format: date-time
+          description: The entry's `sys.updatedAt`, usable as a sitemap `lastmod`
+
   securitySchemes:
     BearerAuth:
       type: http

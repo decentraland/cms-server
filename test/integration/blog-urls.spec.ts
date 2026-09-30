@@ -93,6 +93,14 @@ test('when listing blog content with view=urls', ({ components }) => {
 
       expect(body.items.map((i: { slug: string }) => i.slug)).toContain('english-only')
     })
+
+    // Every slug the view emits has to resolve in the same locale, or the URL leads to a 404.
+    it('should resolve that slug in the plain lookup for the same locale', async () => {
+      const response = await components.localFetch.fetch(`${base('categories')}?slug=english-only&locale=zh`)
+      const body = await response.json()
+
+      expect(body.items.map((i: { sys: { id: string } }) => i.sys.id)).toEqual(['cat-2'])
+    })
   })
 
   // `/blog/:categorySlug/:postSlug` cannot be built without a category.
@@ -106,6 +114,30 @@ test('when listing blog content with view=urls', ({ components }) => {
       const body = await response.json()
 
       expect(body.items.map((i: { slug: string }) => i.slug)).not.toContain('orphan-post')
+    })
+
+    it('should not count it in total either', async () => {
+      const response = await components.localFetch.fetch(`${base('posts')}?view=urls&locale=en-US`)
+      const body = await response.json()
+
+      expect(body.total).toBe(body.items.length)
+    })
+  })
+
+  // The projection has no way to apply these, so failing loudly beats returning the whole archive.
+  describe('and a filter the view cannot honour is given', () => {
+    let responses: Response[]
+
+    beforeEach(async () => {
+      responses = await Promise.all(
+        ['slug=first-post', 'category=technology', 'author=john-doe', 'q=first'].map((filter) =>
+          components.localFetch.fetch(`${base('posts')}?view=urls&locale=en-US&${filter}`)
+        )
+      )
+    })
+
+    it('should reject each of them with a 400', () => {
+      expect(responses.map((r) => r.status)).toEqual([400, 400, 400, 400])
     })
   })
 
