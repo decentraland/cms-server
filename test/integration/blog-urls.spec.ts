@@ -101,6 +101,57 @@ test('when listing blog content with view=urls', ({ components }) => {
 
       expect(body.items.map((i: { sys: { id: string } }) => i.sys.id)).toEqual(['cat-2'])
     })
+
+    // The fallback also drives the `category=` / `author=` filters on the posts listing.
+    describe('and a post references it through an author with the same gap', () => {
+      beforeEach(async () => {
+        const author = createBlogAuthorEntry({ id: 'auth-2' })
+        const fields = author.fields as Record<string, Record<string, unknown>>
+        fields.id = { 'en-US': 'solo-author' }
+        await postWebhook(author)
+        await postWebhook(
+          createBlogPostEntry({ id: 'post-2', slug: 'second-post', categoryId: 'cat-2', authorId: 'auth-2' })
+        )
+      })
+
+      it('should filter posts by the fallback category slug', async () => {
+        const response = await components.localFetch.fetch(`${base('posts')}?category=english-only&locale=zh`)
+        const body = await response.json()
+
+        expect(body.items.map((i: { sys: { id: string } }) => i.sys.id)).toEqual(['post-2'])
+      })
+
+      it('should filter posts by the fallback author slug', async () => {
+        const response = await components.localFetch.fetch(`${base('posts')}?author=solo-author&locale=zh`)
+        const body = await response.json()
+
+        expect(body.items.map((i: { sys: { id: string } }) => i.sys.id)).toEqual(['post-2'])
+      })
+    })
+
+    // A fallback must never make one slug name two entries in the same locale.
+    describe('and another entry owns that slug in the requested locale', () => {
+      beforeEach(async () => {
+        const category = createBlogCategoryEntry({ id: 'cat-3' })
+        const fields = category.fields as Record<string, Record<string, unknown>>
+        fields.id = { 'en-US': 'owner-in-english', zh: 'english-only' }
+        await postWebhook(category)
+      })
+
+      it('should resolve the lookup to the exact-locale owner only', async () => {
+        const response = await components.localFetch.fetch(`${base('categories')}?slug=english-only&locale=zh`)
+        const body = await response.json()
+
+        expect(body.items.map((i: { sys: { id: string } }) => i.sys.id)).toEqual(['cat-3'])
+      })
+
+      it('should emit that slug once in the urls view', async () => {
+        const response = await components.localFetch.fetch(`${base('categories')}?view=urls&locale=zh`)
+        const body = await response.json()
+
+        expect(body.items.filter((i: { slug: string }) => i.slug === 'english-only')).toHaveLength(1)
+      })
+    })
   })
 
   // `/blog/:categorySlug/:postSlug` cannot be built without a category.
@@ -120,7 +171,7 @@ test('when listing blog content with view=urls', ({ components }) => {
       const response = await components.localFetch.fetch(`${base('posts')}?view=urls&locale=en-US`)
       const body = await response.json()
 
-      expect(body.total).toBe(body.items.length)
+      expect(body.total).toBe(1)
     })
   })
 

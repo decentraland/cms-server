@@ -88,28 +88,56 @@ const FUZZY_MIN_QUERY_LENGTH = 4
 const REF_RANK_WEIGHT = 0.5
 const FUZZY_RANK_WEIGHT = 0.3
 
+/** Where a localized `slug` lives and the placeholders that scope it, shared by the slug helpers. */
+interface SlugScope {
+  table: string
+  column: string
+  space: string
+  environment: string
+  locale: string
+}
+
+/**
+ * True when an entry of `scope.table` carries `slug` as its exact value for the requested
+ * locale. Falling back to `en-US` is only valid while this is false: otherwise one slug would
+ * name two entries in the same locale, and a lookup would return both.
+ */
+function exactSlugExists(scope: SlugScope, slug: string): string {
+  return `EXISTS (
+    SELECT 1 FROM ${scope.table} x
+    WHERE x.space = ${scope.space} AND x.environment = ${scope.environment}
+      AND x.slug @> jsonb_build_object(${scope.locale}, ${slug})
+  )`
+}
+
 /**
  * Resolves a localized `slug` jsonb to one string: the requested locale when it has a non-empty
- * value, else `en-US`. This is `localizeFieldValue` in SQL, and `slugMatches` below is the same
- * rule as a predicate; keep the three together. Both write paths store `fields.id` as the raw
+ * value, else `en-US` unless another entry owns that slug in the requested locale. This is
+ * `localizeFieldValue` in SQL plus the uniqueness rule, and `slugMatches` below is the same
+ * rule as a predicate; keep them together. Both write paths store `fields.id` as the raw
  * per-locale object, so there is no scalar case to handle.
  */
-function localizedSlug(column: string, localeParam: string): string {
-  return `COALESCE(NULLIF(${column} ->> ${localeParam}, ''), NULLIF(${column} ->> 'en-US', ''))`
+function localizedSlug(scope: SlugScope): string {
+  const fallback = `NULLIF(${scope.column} ->> 'en-US', '')`
+  return `COALESCE(
+    NULLIF(${scope.column} ->> ${scope.locale}, ''),
+    CASE WHEN NOT ${exactSlugExists(scope, fallback)} THEN ${fallback} END
+  )`
 }
 
 /**
  * Matches a localized `slug` jsonb against a requested slug under the `localizedSlug` rule, so
- * every slug a listing renders (or `view=urls` emits) can be looked back up in the same locale.
- * Written as two containment checks rather than `localizedSlug(...) = $slug` so the GIN
+ * every slug a listing renders (or `view=urls` emits) resolves to that one entry in the same
+ * locale. Written as containment checks rather than `localizedSlug(...) = $slug` so the GIN
  * (`jsonb_path_ops`) index on `slug` still applies.
  */
-function slugMatches(column: string, localeParam: string, slugParam: string): string {
+function slugMatches(scope: SlugScope, slug: string): string {
   return `(
-    ${column} @> jsonb_build_object(${localeParam}, ${slugParam})
+    ${scope.column} @> jsonb_build_object(${scope.locale}, ${slug})
     OR (
-      NULLIF(${column} ->> ${localeParam}, '') IS NULL
-      AND ${column} @> jsonb_build_object('en-US', ${slugParam})
+      NULLIF(${scope.column} ->> ${scope.locale}, '') IS NULL
+      AND ${scope.column} @> jsonb_build_object('en-US', ${slug})
+      AND NOT ${exactSlugExists(scope, slug)}
     )
   )`
 }
@@ -125,16 +153,16 @@ const SLUG_FILTER_JOINS = `
   LEFT JOIN cms_blog_categories cat_slug
     ON $3::text IS NOT NULL
     AND cat_slug.space = $1 AND cat_slug.environment = $2
-    AND ${slugMatches('cat_slug.slug', '$4::text', '$3::text')}
+    AND ${slugMatches({ table: 'cms_blog_categories', column: 'cat_slug.slug', space: '$1', environment: '$2', locale: '$4::text' }, '$3::text')}
   LEFT JOIN cms_blog_authors auth_slug
     ON $5::text IS NOT NULL
     AND auth_slug.space = $1 AND auth_slug.environment = $2
-    AND ${slugMatches('auth_slug.slug', '$4::text', '$5::text')}`
+    AND ${slugMatches({ table: 'cms_blog_authors', column: 'auth_slug.slug', space: '$1', environment: '$2', locale: '$4::text' }, '$5::text')}`
 
 const SLUG_FILTER_WHERES = `
   AND ($3::text IS NULL OR bp.category_id = cat_slug.id)
   AND ($5::text IS NULL OR bp.author_id = auth_slug.id)
-  AND ($6::text IS NULL OR ${slugMatches('bp.slug', '$4::text', '$6::text')})`
+  AND ($6::text IS NULL OR ${slugMatches({ table: 'cms_blog_posts', column: 'bp.slug', space: '$1', environment: '$2', locale: '$4::text' }, '$6::text')})`
 
 /**
  * Sanitizes a user-supplied search string and converts it into a `to_tsquery`-compatible
@@ -623,7 +651,7 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     const { locale, slug, limit, skip } = opts
 
     const whereClause = `space = $1 AND environment = $2
-    AND ($3::text IS NULL OR ${slugMatches('slug', '$4::text', '$3::text')})`
+    AND ($3::text IS NULL OR ${slugMatches({ table, column: 'slug', space: '$1', environment: '$2', locale: '$4::text' }, '$3::text')})`
     const params = [space, environment, slug || null, locale]
 
     const [countResult, itemsResult] = await Promise.all([
@@ -680,7 +708,9 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     const { locale, limit, skip } = opts
     const table = URL_PROJECTION_TABLES[type]
     const isPosts = type === 'posts'
-    const slugExpr = localizedSlug('t.slug', '$3')
+    const scope = { space: '$1', environment: '$2', locale: '$3::text' }
+    const slugExpr = localizedSlug({ ...scope, table, column: 't.slug' })
+    const categoryExpr = localizedSlug({ ...scope, table: 'cms_blog_categories', column: 'cat.slug' })
 
     // Posts carry their category slug through a join; the other two have no second URL segment.
     const fromClause = isPosts
@@ -690,10 +720,14 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
       : `${table} t`
     const whereClause = `t.space = $1 AND t.environment = $2
       AND ${slugExpr} IS NOT NULL
-      ${isPosts ? `AND cat.id IS NOT NULL AND ${localizedSlug('cat.slug', '$3')} IS NOT NULL` : ''}`
+      ${isPosts ? `AND cat.id IS NOT NULL AND ${categoryExpr} IS NOT NULL` : ''}`
     // Neither published date nor slug is unique, so add the primary key or OFFSET paging can
     // repeat and skip rows between pages.
-    const order = isPosts ? 't.published_date_sort DESC NULLS LAST, t.id' : '1, t.id'
+    const pageColumns = isPosts
+      ? `t.id, t.space, t.environment, t.published_date_sort, ${slugExpr} AS slug, ${categoryExpr} AS category_slug`
+      : `t.id, t.space, t.environment, ${slugExpr} AS slug`
+    const pageOrder = isPosts ? 't.published_date_sort DESC NULLS LAST, t.id' : 'slug, t.id'
+    const outerOrder = isPosts ? 'page.published_date_sort DESC NULLS LAST, page.id' : 'page.slug, page.id'
 
     const [countResult, rowsResult] = await Promise.all([
       pool().query({
@@ -701,14 +735,22 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
         values: [space, environment, locale],
         name: `list_blog_urls_count_${type}`
       }),
+      // `content` is TOASTed, and reading `sys.updatedAt` out of it decompresses the whole
+      // rich-text body. Page on the small columns first and join `content` back for that page
+      // only, or every request would detoast the entire archive before OFFSET/LIMIT applied.
       pool().query({
-        text: `SELECT ${slugExpr} AS slug,
-                      ${isPosts ? `${localizedSlug('cat.slug', '$3')} AS category_slug,` : ''}
+        text: `SELECT page.slug,
+                      ${isPosts ? 'page.category_slug,' : ''}
                       t.content -> 'sys' ->> 'updatedAt' AS updated_at
-               FROM ${fromClause}
-               WHERE ${whereClause}
-               ORDER BY ${order}
-               OFFSET $4 LIMIT $5`,
+               FROM (
+                 SELECT ${pageColumns}
+                 FROM ${fromClause}
+                 WHERE ${whereClause}
+                 ORDER BY ${pageOrder}
+                 OFFSET $4 LIMIT $5
+               ) page
+               JOIN ${table} t ON t.space = page.space AND t.environment = page.environment AND t.id = page.id
+               ORDER BY ${outerOrder}`,
         values: [space, environment, locale, skip, limit],
         name: `list_blog_urls_${type}`
       })

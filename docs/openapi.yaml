@@ -411,7 +411,9 @@ components:
       properties:
         slug:
           type: string
-          description: Slug in the requested locale, falling back to `en-US` like the listings do
+          description: >
+            Slug in the requested locale, falling back to `en-US` like the listings do, unless
+            another entry owns that slug in the requested locale
         categorySlug:
           type: string
           description: Posts only. First path segment of `/blog/:categorySlug/:postSlug`
