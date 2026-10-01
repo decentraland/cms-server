@@ -88,6 +88,63 @@ const FUZZY_MIN_QUERY_LENGTH = 4
 const REF_RANK_WEIGHT = 0.5
 const FUZZY_RANK_WEIGHT = 0.3
 
+/** Where a localized `slug` lives and the placeholders that scope it, shared by the slug helpers. */
+interface SlugScope {
+  table: string
+  column: string
+  space: string
+  environment: string
+  locale: string
+}
+
+/**
+ * True when an entry of `scope.table` carries `slug` as its exact value for the requested
+ * locale. Falling back to `en-US` is only valid while this is false: otherwise one slug would
+ * name two entries in the same locale, and a lookup would return both.
+ */
+function exactSlugExists(scope: SlugScope, slug: string): string {
+  return `EXISTS (
+    SELECT 1 FROM ${scope.table} x
+    WHERE x.space = ${scope.space} AND x.environment = ${scope.environment}
+      AND x.slug @> jsonb_build_object(${scope.locale}, ${slug})
+  )`
+}
+
+/**
+ * Resolves a localized `slug` jsonb to one string: the requested locale when it has a non-empty
+ * value, else `en-US` unless another entry owns that slug in the requested locale. This is
+ * `localizeFieldValue` in SQL plus the uniqueness rule, and `slugMatches` below is the same
+ * rule as a predicate; keep them together. Both write paths store `fields.id` as the raw
+ * per-locale object, so there is no scalar case to handle.
+ */
+function localizedSlug(scope: SlugScope): string {
+  const fallback = `NULLIF(${scope.column} ->> 'en-US', '')`
+  return `COALESCE(
+    NULLIF(${scope.column} ->> ${scope.locale}, ''),
+    CASE WHEN NOT ${exactSlugExists(scope, fallback)} THEN ${fallback} END
+  )`
+}
+
+/**
+ * Matches a localized `slug` jsonb against a requested slug under the `localizedSlug` rule, so
+ * every slug `view=urls` emits resolves to that one entry in the same locale. The entry listings
+ * render `fields.id` through `localizeFieldValue`, which falls back without the ownership check
+ * (it would need the other entries to apply it), so in the collision case they can display a
+ * fallback slug that this predicate resolves to the exact-locale owner. `view=urls` is the view
+ * built for URLs, and it does apply the check. Written as containment checks rather than
+ * `localizedSlug(...) = $slug` so the GIN (`jsonb_path_ops`) index on `slug` still applies.
+ */
+function slugMatches(scope: SlugScope, slug: string): string {
+  return `(
+    ${scope.column} @> jsonb_build_object(${scope.locale}, ${slug})
+    OR (
+      NULLIF(${scope.column} ->> ${scope.locale}, '') IS NULL
+      AND ${scope.column} @> jsonb_build_object('en-US', ${slug})
+      AND NOT ${exactSlugExists(scope, slug)}
+    )
+  )`
+}
+
 /**
  * SQL fragments for the slug/category/author filter, shared between the plain and search
  * paths. The joined aliases are non-populating unless the corresponding filter param is
@@ -99,16 +156,16 @@ const SLUG_FILTER_JOINS = `
   LEFT JOIN cms_blog_categories cat_slug
     ON $3::text IS NOT NULL
     AND cat_slug.space = $1 AND cat_slug.environment = $2
-    AND cat_slug.slug @> jsonb_build_object($4::text, $3::text)
+    AND ${slugMatches({ table: 'cms_blog_categories', column: 'cat_slug.slug', space: '$1', environment: '$2', locale: '$4::text' }, '$3::text')}
   LEFT JOIN cms_blog_authors auth_slug
     ON $5::text IS NOT NULL
     AND auth_slug.space = $1 AND auth_slug.environment = $2
-    AND auth_slug.slug @> jsonb_build_object($4::text, $5::text)`
+    AND ${slugMatches({ table: 'cms_blog_authors', column: 'auth_slug.slug', space: '$1', environment: '$2', locale: '$4::text' }, '$5::text')}`
 
 const SLUG_FILTER_WHERES = `
   AND ($3::text IS NULL OR bp.category_id = cat_slug.id)
   AND ($5::text IS NULL OR bp.author_id = auth_slug.id)
-  AND ($6::text IS NULL OR bp.slug @> jsonb_build_object($4::text, $6::text))`
+  AND ($6::text IS NULL OR ${slugMatches({ table: 'cms_blog_posts', column: 'bp.slug', space: '$1', environment: '$2', locale: '$4::text' }, '$6::text')})`
 
 /**
  * Sanitizes a user-supplied search string and converts it into a `to_tsquery`-compatible
@@ -196,6 +253,12 @@ export interface ICmsDatabaseComponent {
   listBlogPosts(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult>
   listBlogCategories(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult>
   listBlogAuthors(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult>
+  listBlogUrlProjection(
+    space: string,
+    environment: string,
+    type: BlogListType,
+    opts: Pick<ListBlogOptions, 'locale' | 'limit' | 'skip'>
+  ): Promise<BlogUrlProjectionResult>
   getLastSync(space: string, environment: string): Promise<Date | null>
   setLastSync(space: string, environment: string, timestamp: string, client?: DatabaseClient): Promise<void>
   bulkUpsertBlogContent(
@@ -206,6 +269,22 @@ export interface ICmsDatabaseComponent {
     client?: DatabaseClient
   ): Promise<void>
 }
+
+/** One row of the `view=urls` projection: no `content`, so the whole archive stays a few tens of KB. */
+export interface BlogUrlRow {
+  /** Never null: the query filters out rows whose slug does not resolve for any locale. */
+  slug: string
+  /** Posts only, and never null there for the same reason. */
+  category_slug?: string
+  updated_at: string | null
+}
+
+export interface BlogUrlProjectionResult {
+  rows: BlogUrlRow[]
+  total: number
+}
+
+export type BlogListType = 'posts' | 'categories' | 'authors'
 
 /**
  * Creates the CMS database adapter.
@@ -575,7 +654,7 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     const { locale, slug, limit, skip } = opts
 
     const whereClause = `space = $1 AND environment = $2
-    AND ($3::text IS NULL OR slug @> jsonb_build_object($4::text, $3::text))`
+    AND ($3::text IS NULL OR ${slugMatches({ table, column: 'slug', space: '$1', environment: '$2', locale: '$4::text' }, '$3::text')})`
     const params = [space, environment, slug || null, locale]
 
     const [countResult, itemsResult] = await Promise.all([
@@ -606,6 +685,84 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
 
   async function listBlogAuthors(space: string, environment: string, opts: ListBlogOptions): Promise<ListResult> {
     return listBlogRef('cms_blog_authors', 'list_authors', space, environment, opts)
+  }
+
+  const URL_PROJECTION_TABLES: Record<BlogListType, string> = {
+    posts: 'cms_blog_posts',
+    categories: 'cms_blog_categories',
+    authors: 'cms_blog_authors'
+  }
+
+  /**
+   * The `view=urls` projection: slug, the post's category slug, and the entry's own
+   * `sys.updatedAt`. Never selects `content`, which is what makes a page a few KB instead of the
+   * 2.5 MB a listing page costs once every row carries its rich-text body.
+   *
+   * Rows a consumer could not turn into a URL are excluded in SQL rather than in the caller, so
+   * `total` equals the number of URLs the caller actually receives: no resolvable slug, and for
+   * posts no category, since `/blog/:categorySlug/:postSlug` has no address without one.
+   */
+  async function listBlogUrlProjection(
+    space: string,
+    environment: string,
+    type: BlogListType,
+    opts: Pick<ListBlogOptions, 'locale' | 'limit' | 'skip'>
+  ): Promise<BlogUrlProjectionResult> {
+    const { locale, limit, skip } = opts
+    const table = URL_PROJECTION_TABLES[type]
+    const isPosts = type === 'posts'
+    const scope = { space: '$1', environment: '$2', locale: '$3::text' }
+    const slugExpr = localizedSlug({ ...scope, table, column: 't.slug' })
+    const categoryExpr = localizedSlug({ ...scope, table: 'cms_blog_categories', column: 'cat.slug' })
+
+    // Posts carry their category slug through a join; the other two have no second URL segment.
+    const fromClause = isPosts
+      ? `${table} t
+         LEFT JOIN cms_blog_categories cat
+           ON cat.space = t.space AND cat.environment = t.environment AND cat.id = t.category_id`
+      : `${table} t`
+    const whereClause = `t.space = $1 AND t.environment = $2
+      AND ${slugExpr} IS NOT NULL
+      ${isPosts ? `AND cat.id IS NOT NULL AND ${categoryExpr} IS NOT NULL` : ''}`
+    // Neither published date nor slug is unique, so add the primary key or OFFSET paging can
+    // repeat and skip rows between pages.
+    const pageColumns = isPosts
+      ? `t.id, t.space, t.environment, t.published_date_sort, ${slugExpr} AS slug, ${categoryExpr} AS category_slug`
+      : `t.id, t.space, t.environment, ${slugExpr} AS slug`
+    const pageOrder = isPosts ? 't.published_date_sort DESC NULLS LAST, t.id' : 'slug, t.id'
+    const outerOrder = isPosts ? 'page.published_date_sort DESC NULLS LAST, page.id' : 'page.slug, page.id'
+
+    const [countResult, rowsResult] = await Promise.all([
+      pool().query({
+        text: `SELECT count(*) AS total FROM ${fromClause} WHERE ${whereClause}`,
+        values: [space, environment, locale],
+        name: `list_blog_urls_count_${type}`
+      }),
+      // `content` is TOASTed, and reading `sys.updatedAt` out of it decompresses the whole
+      // rich-text body. Page on the small columns first and join `content` back for that page
+      // only, or every request would detoast the entire archive before OFFSET/LIMIT applied.
+      pool().query({
+        text: `SELECT page.slug,
+                      ${isPosts ? 'page.category_slug,' : ''}
+                      t.content -> 'sys' ->> 'updatedAt' AS updated_at
+               FROM (
+                 SELECT ${pageColumns}
+                 FROM ${fromClause}
+                 WHERE ${whereClause}
+                 ORDER BY ${pageOrder}
+                 OFFSET $4 LIMIT $5
+               ) page
+               JOIN ${table} t ON t.space = page.space AND t.environment = page.environment AND t.id = page.id
+               ORDER BY ${outerOrder}`,
+        values: [space, environment, locale, skip, limit],
+        name: `list_blog_urls_${type}`
+      })
+    ])
+
+    return {
+      rows: rowsResult.rows as BlogUrlRow[],
+      total: parseInt(countResult.rows[0].total, 10)
+    }
   }
 
   async function getLastSync(space: string, environment: string): Promise<Date | null> {
@@ -687,6 +844,7 @@ export function createCmsDatabaseComponent(components: Pick<AppComponents, 'pg' 
     listBlogPosts,
     listBlogCategories,
     listBlogAuthors,
+    listBlogUrlProjection,
     getLastSync,
     setLastSync,
     bulkUpsertBlogContent

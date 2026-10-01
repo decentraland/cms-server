@@ -60,6 +60,12 @@ paths:
         Returns a paginated list of blog posts, categories, or authors.
         Supports filtering by category slug, author slug, and post slug.
         Results are localized to the requested locale.
+
+        `view=urls` swaps the entry payload for a projection carrying only what a link builder
+        needs (slug, the post's category slug, and the entry's `sys.updatedAt`). A listing page of
+        100 posts is about 2.5 MB because every row carries its rich-text body; a projected page is
+        a few KB, so the whole archive fits in one request per type. Its limit caps at 1000 rather
+        than 100 for the same reason.
       parameters:
         - name: space
           in: path
@@ -80,6 +86,16 @@ paths:
             type: string
             enum: [posts, categories, authors]
           description: Blog content type to list
+        - name: view
+          in: query
+          schema:
+            type: string
+            enum: [urls]
+          description: >
+            Omit for whole entries. `urls` returns the slug projection instead. It cannot be
+            combined with `slug`, `category`, `author` or `q`: the projection does not apply
+            them, so the request is rejected with a 400 rather than silently returning the
+            whole archive.
         - name: locale
           in: query
           schema:
@@ -106,9 +122,9 @@ paths:
           in: query
           schema:
             type: integer
-            default: 20
-            maximum: 100
-          description: Maximum items per page
+          description: >
+            Maximum items per page. Entry listings default to 20 and cap at 100; `view=urls`
+            defaults to 1000 and caps at 1000. A value above the cap is clamped, not rejected.
         - name: skip
           in: query
           schema:
@@ -130,12 +146,19 @@ paths:
                 properties:
                   items:
                     type: array
+                    description: Localized Contentful Entries, or `BlogUrl` items when `view=urls`
                     items:
-                      type: object
-                      description: Localized Contentful Entry
+                      anyOf:
+                        - type: object
+                          description: Localized Contentful Entry
+                        - $ref: '#/components/schemas/BlogUrl'
                   total:
                     type: integer
-                    description: Total matching items across all pages
+                    description: >
+                      Total matching items across all pages. With `view=urls` it counts only
+                      routable entries, i.e. the ones the projection can return: a post whose
+                      category has no unambiguous slug in the requested locale is left out of
+                      both `items` and `total`.
                   skip:
                     type: integer
                   limit:
@@ -382,6 +405,26 @@ paths:
                     type: string
 
 components:
+  schemas:
+    BlogUrl:
+      type: object
+      description: One item of the `view=urls` projection, stripped to what a link builder needs
+      required: [slug, updatedAt]
+      properties:
+        slug:
+          type: string
+          description: >
+            Slug in the requested locale, falling back to `en-US` like the listings do, unless
+            another entry owns that slug in the requested locale
+        categorySlug:
+          type: string
+          description: Posts only. First path segment of `/blog/:categorySlug/:postSlug`
+        updatedAt:
+          type: string
+          nullable: true
+          format: date-time
+          description: The entry's `sys.updatedAt`, usable as a sitemap `lastmod`
+
   securitySchemes:
     BearerAuth:
       type: http

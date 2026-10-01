@@ -1,12 +1,27 @@
 import { randomUUID } from 'crypto'
 import type { IHttpServerComponent } from '@dcl/core-commons'
-import { listBlog } from '../../logic/blog'
+import { listBlog, listBlogUrls } from '../../logic/blog'
 import { parseLocale } from '../../logic/localization'
 import { BadRequestError, NotFoundError } from '../../types/errors'
 import { mapErrorToResponse } from '../error-mapper'
 import type { HandlerContextWithPath } from '../../types'
 
 const MAX_SEARCH_QUERY_LENGTH = 200
+
+/**
+ * A projected page is a few KB rather than the 2.5 MB a listing page costs once every row carries
+ * its rich-text body, so the whole archive fits in one request per type and a consumer that only
+ * builds links never pages.
+ */
+const MAX_URL_VIEW_LIMIT = 1000
+const MAX_ENTRY_LIMIT = 100
+
+/** Parses the `view` query param. Only `urls` is defined; anything else is rejected. */
+function parseView(raw: string | null): 'urls' | null {
+  if (raw === null || raw === '') return null
+  if (raw === 'urls') return 'urls'
+  throw new BadRequestError(`Invalid view: ${raw}`)
+}
 
 /** Parses the `q` query param: trimmed non-empty string, or null. Throws for over-length. */
 function parseSearchQuery(raw: string | null): string | null {
@@ -53,27 +68,37 @@ export async function blogHandler(
     const category = url.searchParams.get('category')
     const author = url.searchParams.get('author')
     const q = parseSearchQuery(url.searchParams.get('q'))
-    const limitRaw = parseInt(url.searchParams.get('limit') || '20')
+    const view = parseView(url.searchParams.get('view'))
+    if (view === 'urls' && (slug || category || author || q)) {
+      throw new BadRequestError('view=urls does not accept the slug, category, author or q filters')
+    }
+    const maxLimit = view === 'urls' ? MAX_URL_VIEW_LIMIT : MAX_ENTRY_LIMIT
+    const defaultLimit = view === 'urls' ? MAX_URL_VIEW_LIMIT : 20
+    const limitRaw = parseInt(url.searchParams.get('limit') || String(defaultLimit))
     const skipRaw = parseInt(url.searchParams.get('skip') || '0')
-    const limit = Number.isNaN(limitRaw) ? 20 : Math.min(limitRaw, 100)
+    const limit = Number.isNaN(limitRaw) ? defaultLimit : Math.min(limitRaw, maxLimit)
     const skip = Number.isNaN(skipRaw) ? 0 : skipRaw
 
     if (!slug && (limit < 1 || skip < 0)) {
       throw new BadRequestError('Invalid pagination parameters')
     }
 
-    const result = await listBlog(components, {
-      space,
-      environment,
-      type: type as 'posts' | 'categories' | 'authors',
-      locale,
-      slug,
-      category,
-      author,
-      q,
-      limit,
-      skip
-    })
+    const blogType = type as 'posts' | 'categories' | 'authors'
+    const result =
+      view === 'urls'
+        ? await listBlogUrls(components, { space, environment, type: blogType, locale, limit, skip })
+        : await listBlog(components, {
+            space,
+            environment,
+            type: blogType,
+            locale,
+            slug,
+            category,
+            author,
+            q,
+            limit,
+            skip
+          })
 
     return {
       status: 200,

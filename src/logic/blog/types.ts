@@ -28,3 +28,23 @@ export interface BlogListResult {
   skip: number
   limit: number
 }
+
+/** Pre-validated params for the `view=urls` projection: the listing params minus the filters it does not honour. */
+export type BlogUrlListParams = Pick<BlogListParams, 'space' | 'environment' | 'type' | 'locale' | 'limit' | 'skip'>
+
+/** One item of the `view=urls` projection, stripped to what a link builder needs. */
+export interface BlogUrl {
+  slug: string
+  /** Posts only: the first path segment of `/blog/:categorySlug/:postSlug`. */
+  categorySlug?: string
+  /** The entry's `sys.updatedAt`, so a consumer gets a real `lastmod` rather than an invented one. */
+  updatedAt: string | null
+}
+
+/** Same envelope as `BlogListResult`, so a paging consumer treats both views alike. */
+export interface BlogUrlListResult {
+  items: BlogUrl[]
+  total: number
+  skip: number
+  limit: number
+}
