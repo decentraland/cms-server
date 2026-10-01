@@ -122,9 +122,9 @@ paths:
           in: query
           schema:
             type: integer
-            default: 20
-            maximum: 100
-          description: Maximum items per page
+          description: >
+            Maximum items per page. Entry listings default to 20 and cap at 100; `view=urls`
+            defaults to 1000 and caps at 1000. A value above the cap is clamped, not rejected.
         - name: skip
           in: query
           schema:
@@ -148,7 +148,7 @@ paths:
                     type: array
                     description: Localized Contentful Entries, or `BlogUrl` items when `view=urls`
                     items:
-                      oneOf:
+                      anyOf:
                         - type: object
                           description: Localized Contentful Entry
                         - $ref: '#/components/schemas/BlogUrl'
@@ -420,7 +420,8 @@ components:
           type: string
           description: Posts only. First path segment of `/blog/:categorySlug/:postSlug`
         updatedAt:
-          type: [string, 'null']
+          type: string
+          nullable: true
           format: date-time
           description: The entry's `sys.updatedAt`, usable as a sitemap `lastmod`
 

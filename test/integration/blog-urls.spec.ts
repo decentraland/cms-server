@@ -172,6 +172,53 @@ test('when listing blog content with view=urls', ({ components }) => {
           expect(body.total).toBe(1)
         })
       })
+
+      // The same guard backs every `slugMatches` call site: post slug, category and author
+      // filters on the posts listing, and the author lookup.
+      describe('and posts and authors collide the same way', () => {
+        beforeEach(async () => {
+          const fallbackAuthor = createBlogAuthorEntry({ id: 'auth-2' })
+          ;(fallbackAuthor.fields as Record<string, unknown>).id = { 'en-US': 'solo-author' }
+          const ownerAuthor = createBlogAuthorEntry({ id: 'auth-3' })
+          ;(ownerAuthor.fields as Record<string, unknown>).id = { 'en-US': 'owner-author', zh: 'solo-author' }
+          const fallbackPost = createBlogPostEntry({ id: 'post-2', categoryId: 'cat-2', authorId: 'auth-2' })
+          ;(fallbackPost.fields as Record<string, unknown>).id = { 'en-US': 'shared-post' }
+          const ownerPost = createBlogPostEntry({ id: 'post-3', categoryId: 'cat-3', authorId: 'auth-3' })
+          ;(ownerPost.fields as Record<string, unknown>).id = { 'en-US': 'post-three', zh: 'shared-post' }
+          await postWebhook(fallbackAuthor)
+          await postWebhook(ownerAuthor)
+          await postWebhook(fallbackPost)
+          await postWebhook(ownerPost)
+        })
+
+        it('should resolve the post slug lookup to the exact-locale owner only', async () => {
+          const response = await components.localFetch.fetch(`${base('posts')}?slug=shared-post&locale=zh`)
+          const body = await response.json()
+
+          expect(body.items.map((i: { sys: { id: string } }) => i.sys.id)).toEqual(['post-3'])
+        })
+
+        it('should filter posts by the category that owns the slug only', async () => {
+          const response = await components.localFetch.fetch(`${base('posts')}?category=english-only&locale=zh`)
+          const body = await response.json()
+
+          expect(body.items.map((i: { sys: { id: string } }) => i.sys.id)).toEqual(['post-3'])
+        })
+
+        it('should filter posts by the author that owns the slug only', async () => {
+          const response = await components.localFetch.fetch(`${base('posts')}?author=solo-author&locale=zh`)
+          const body = await response.json()
+
+          expect(body.items.map((i: { sys: { id: string } }) => i.sys.id)).toEqual(['post-3'])
+        })
+
+        it('should resolve the author slug lookup to the exact-locale owner only', async () => {
+          const response = await components.localFetch.fetch(`${base('authors')}?slug=solo-author&locale=zh`)
+          const body = await response.json()
+
+          expect(body.items.map((i: { sys: { id: string } }) => i.sys.id)).toEqual(['auth-3'])
+        })
+      })
     })
   })
 
