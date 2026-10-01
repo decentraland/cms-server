@@ -151,6 +151,27 @@ test('when listing blog content with view=urls', ({ components }) => {
 
         expect(body.items.filter((i: { slug: string }) => i.slug === 'english-only')).toHaveLength(1)
       })
+
+      // With its category's fallback suppressed, the post has no unambiguous URL in this locale.
+      describe('and a post belongs to the entry whose fallback was suppressed', () => {
+        beforeEach(async () => {
+          await postWebhook(createBlogPostEntry({ id: 'post-2', slug: 'second-post', categoryId: 'cat-2' }))
+        })
+
+        it('should leave the post out of the urls view', async () => {
+          const response = await components.localFetch.fetch(`${base('posts')}?view=urls&locale=zh`)
+          const body = await response.json()
+
+          expect(body.items.map((i: { slug: string }) => i.slug)).not.toContain('second-post')
+        })
+
+        it('should not count it in total', async () => {
+          const response = await components.localFetch.fetch(`${base('posts')}?view=urls&locale=zh`)
+          const body = await response.json()
+
+          expect(body.total).toBe(1)
+        })
+      })
     })
   })
 

@@ -156,7 +156,9 @@ paths:
                     type: integer
                     description: >
                       Total matching items across all pages. With `view=urls` it counts only
-                      routable entries, i.e. the ones the projection can return.
+                      routable entries, i.e. the ones the projection can return: a post whose
+                      category has no unambiguous slug in the requested locale is left out of
+                      both `items` and `total`.
                   skip:
                     type: integer
                   limit:

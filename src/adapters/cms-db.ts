@@ -127,9 +127,12 @@ function localizedSlug(scope: SlugScope): string {
 
 /**
  * Matches a localized `slug` jsonb against a requested slug under the `localizedSlug` rule, so
- * every slug a listing renders (or `view=urls` emits) resolves to that one entry in the same
- * locale. Written as containment checks rather than `localizedSlug(...) = $slug` so the GIN
- * (`jsonb_path_ops`) index on `slug` still applies.
+ * every slug `view=urls` emits resolves to that one entry in the same locale. The entry listings
+ * render `fields.id` through `localizeFieldValue`, which falls back without the ownership check
+ * (it would need the other entries to apply it), so in the collision case they can display a
+ * fallback slug that this predicate resolves to the exact-locale owner. `view=urls` is the view
+ * built for URLs, and it does apply the check. Written as containment checks rather than
+ * `localizedSlug(...) = $slug` so the GIN (`jsonb_path_ops`) index on `slug` still applies.
  */
 function slugMatches(scope: SlugScope, slug: string): string {
   return `(
